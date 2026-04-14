@@ -61,7 +61,7 @@ Create the GitHub OAuth App at https://github.com/settings/developers:
 | Field | Description |
 |---|---|
 | GitHub token | OAuth flow or manual PAT |
-| Jira URL | `https://your-org.atlassian.net` or `https://issues.redhat.com` |
+| Jira URL | `https://your-org.atlassian.net` (Cloud) or your Data Center base URL |
 | Jira API Token | PAT (Data Center) or API token (Cloud) |
 | Jira Email | Only required for Jira Cloud (Basic Auth) |
 | Date range | Calendar picker with quick presets |
