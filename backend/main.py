@@ -1,17 +1,23 @@
 """
-Associate Performance Metrics — Jira backend
+Associate Performance Metrics — Jira + GitLab backend
 Start: uvicorn main:app --reload --port 8000
 
 Supports both Jira Data Center (Bearer PAT) and Atlassian Cloud (Basic Auth
 with email + API token).  Pass X-Jira-Email to enable Cloud mode.
+
+GitLab self-managed instances (e.g. behind VPN) are accessed via PRIVATE-TOKEN
+header.  All GitLab calls are proxied through this backend so the browser never
+needs VPN-level connectivity.
 """
 
 import base64
 import logging
 import os
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote as url_quote
 
 from dotenv import load_dotenv
 
@@ -89,9 +95,30 @@ def make_jira(url: str, token: str, email: Optional[str] = None) -> JIRA:
     return j
 
 
+def _is_network_error(e: Exception) -> bool:
+    """Detect DNS / connection errors that typically mean VPN is not connected."""
+    msg = str(e).lower()
+    return any(k in msg for k in (
+        "nameresolutionerror", "name or service not known",
+        "nodename nor servname", "getaddrinfo failed",
+        "max retries exceeded", "connectionerror",
+        "newconnectionerror", "failed to establish",
+        "no route to host", "network is unreachable",
+    ))
+
+
 def http_500(e: Exception) -> HTTPException:
     tb = traceback.format_exc()
     log.error(tb)
+    if _is_network_error(e):
+        return HTTPException(
+            status_code=503,
+            detail=(
+                "Unable to reach the server. If this host is behind a VPN "
+                "(e.g. Red Hat VPN), please make sure you are connected to "
+                "the VPN and try again."
+            ),
+        )
     return HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}\n\n{tb}")
 
 
@@ -104,6 +131,9 @@ GH_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
 GH_SCOPE         = "read:user,public_repo"
 # Frontend origin — where to redirect after OAuth completes
 FRONTEND_ORIGIN  = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
+
+# GitLab — self-managed instances often use internal CAs
+GITLAB_SSL_VERIFY = os.environ.get("GITLAB_SSL_VERIFY", "false").lower() in ("1", "true", "yes")
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -303,31 +333,48 @@ def _resolve_to_account_id(jira_url: str, token: str, email: Optional[str], valu
 
 # ── Issues ────────────────────────────────────────────────────────────────────
 
-ISSUE_FIELDS = [
+ISSUE_FIELDS_BASE = [
     "summary", "status", "priority", "assignee", "issuetype",
     "created", "updated", "resolutiondate",
     "customfield_10020",  # sprint
-    "customfield_10016",  # story points
     "labels", "fixVersions", "components",
 ]
 
+# Well-known custom field IDs for story points across Jira instances
+SP_CANDIDATE_FIELDS = [
+    "customfield_10028",     # "Story Points" (Red Hat / common)
+    "story_points",          # native field (newer Jira Cloud)
+    "customfield_10016",     # "Story point estimate" (Jira Cloud default)
+    "customfield_10506",     # "DEV Story Points"
+    "customfield_10510",     # "DOC Story Points"
+    "customfield_10572",     # "QE Story Points"
+    "customfield_10977",     # "Original story points"
+    "customfield_10004",     # some instances
+    "customfield_12310243",  # Red Hat Jira (legacy)
+]
 
-def _search_cloud(base_url: str, auth_headers: dict, jql: str) -> list:
-    """Paginate through Atlassian Cloud GET /rest/api/3/search/jql."""
+
+def _search_cloud(base_url: str, auth_headers: dict, jql: str, issue_fields: list = None) -> list:
+    """Paginate through Atlassian Cloud GET /rest/api/3/search/jql with explicit fields."""
     url = f"{base_url.rstrip('/')}/rest/api/3/search/jql"
+    fields_list = issue_fields or ISSUE_FIELDS_BASE
     all_issues: list = []
     next_page_token: Optional[str] = None
 
     while True:
-        # fields must be passed as repeated query params; expand is a plain string
-        params: list = [("jql", jql), ("maxResults", 50), ("expand", "changelog")]
-        for field in ISSUE_FIELDS:
-            params.append(("fields", field))
+        params: dict = {
+            "jql": jql,
+            "maxResults": 50,
+            "fields": ",".join(fields_list),
+        }
         if next_page_token:
-            params.append(("nextPageToken", next_page_token))
+            params["nextPageToken"] = next_page_token
 
+        log.info("Cloud search GET %s fields=%s", url, params["fields"][:120])
         r = _SESSION.get(url, params=params, headers=auth_headers, timeout=30)
+        log.info("Cloud search response: %s", r.status_code)
         if not r.ok:
+            log.error("Cloud search error body: %s", r.text[:500])
             raise HTTPException(status_code=r.status_code,
                                 detail=f"Jira search failed: {r.text[:400]}")
 
@@ -343,8 +390,9 @@ def _search_cloud(base_url: str, auth_headers: dict, jql: str) -> list:
     return all_issues
 
 
-def _search_dc(jira: JIRA, jql: str) -> list:
+def _search_dc(jira: JIRA, jql: str, issue_fields: list = None) -> list:
     """Paginate through Jira Data Center /rest/api/2/search."""
+    fields_list = issue_fields or ISSUE_FIELDS_BASE
     all_issues: list = []
     start = 0
 
@@ -354,7 +402,7 @@ def _search_dc(jira: JIRA, jql: str) -> list:
             startAt=start,
             maxResults=50,
             expand="changelog",
-            fields=ISSUE_FIELDS,
+            fields=fields_list,
             json_result=True,
         )
         batch = page.get("issues", [])
@@ -375,6 +423,7 @@ def get_issues(
     usernames: str           = Query(...),
     since:     Optional[str] = Query(None),
     until:     Optional[str] = Query(None),
+    sp_field:  Optional[str] = Query(None),
     x_jira_url:   str = Header(...),
     x_jira_token: str = Header(...),
     x_jira_email: Optional[str] = Header(None),
@@ -419,15 +468,38 @@ def get_issues(
         jql += " ORDER BY updated DESC"
         log.info("JQL: %s", jql)
 
+        # Build fields list: base fields + all candidate SP fields so we
+        # capture story points regardless of which custom field ID is used
+        sp_extras = set(SP_CANDIDATE_FIELDS)
+        if sp_field:
+            sp_extras.add(sp_field)
+        issue_fields = ISSUE_FIELDS_BASE + sorted(sp_extras)
+
         if cloud:
             auth = make_auth_headers(x_jira_token, x_jira_email)
-            all_issues = _search_cloud(x_jira_url, auth, jql)
+            all_issues = _search_cloud(x_jira_url, auth, jql, issue_fields)
         else:
             jira = make_jira(x_jira_url, x_jira_token)
-            all_issues = _search_dc(jira, jql)
+            all_issues = _search_dc(jira, jql, issue_fields)
 
-        log.info("Returning %d issues", len(all_issues))
-        return {"issues": all_issues, "total": len(all_issues)}
+        # Log story points across all issues for debugging
+        if all_issues:
+            sample = all_issues[0].get("fields", {})
+            all_cf_keys = [k for k in sample.keys() if k.startswith("customfield_")]
+            log.info("First issue (%s) has %d customfield_ keys: %s",
+                     all_issues[0].get("key"), len(all_cf_keys), all_cf_keys[:15])
+            sp_found = 0
+            for iss in all_issues:
+                f = iss.get("fields", {})
+                for cid in SP_CANDIDATE_FIELDS:
+                    if f.get(cid) is not None:
+                        sp_found += 1
+                        log.info("  SP hit: %s.%s = %s", iss.get("key"), cid, f.get(cid))
+                        break
+            log.info("Issues with SP values: %d / %d", sp_found, len(all_issues))
+
+        log.info("Returning %d issues (sp_field=%s)", len(all_issues), sp_field or "auto")
+        return {"issues": all_issues, "total": len(all_issues), "spField": sp_field}
 
     except JIRAError as e:
         log.error("JIRAError %s: %s", e.status_code, e.text)
@@ -470,3 +542,205 @@ def get_remote_links(
         raise HTTPException(status_code=e.status_code or 502, detail=str(e.text or e))
     except Exception as e:
         raise http_500(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── GitLab integration ────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _gl_headers(token: str) -> dict:
+    return {"PRIVATE-TOKEN": token, "Accept": "application/json"}
+
+
+def _gl_paginate(url: str, headers: dict, params: dict, max_items: int = 1000) -> list:
+    """Generic paginated GET against GitLab API v4."""
+    results: list = []
+    page = 1
+    while True:
+        p = {**params, "per_page": 100, "page": page}
+        r = _SESSION.get(url, headers=headers, params=p,
+                         timeout=30, verify=GITLAB_SSL_VERIFY)
+        if not r.ok:
+            raise HTTPException(status_code=r.status_code,
+                                detail=f"GitLab API error: {r.text[:400]}")
+        batch = r.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        results.extend(batch)
+        if len(batch) < 100 or len(results) >= max_items:
+            break
+        page += 1
+    return results[:max_items]
+
+
+@app.get("/api/gitlab/test")
+def gitlab_test(
+    x_gitlab_url:   str = Header(...),
+    x_gitlab_token: str = Header(...),
+):
+    """Verify GitLab credentials by calling /api/v4/user."""
+    url = f"{x_gitlab_url.rstrip('/')}/api/v4/user"
+    log.info("Testing GitLab at %s", url)
+    try:
+        r = _SESSION.get(url, headers=_gl_headers(x_gitlab_token),
+                         timeout=15, verify=GITLAB_SSL_VERIFY)
+        log.info("GitLab test status=%s", r.status_code)
+        if r.ok:
+            data = r.json()
+            return {"status": "ok", "user": data.get("name") or data.get("username", "unknown")}
+        raise HTTPException(status_code=r.status_code,
+                            detail=f"GitLab returned {r.status_code}: {r.text[:400]}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise http_500(e)
+
+
+@app.get("/api/gitlab/commits")
+def gitlab_commits(
+    authors:   str           = Query(""),
+    since:     Optional[str] = Query(None),
+    until:     Optional[str] = Query(None),
+    x_gitlab_url:     str = Header(...),
+    x_gitlab_token:   str = Header(...),
+    x_gitlab_project: str = Header(...),
+):
+    """Fetch commits from a GitLab project, optionally filtered by author(s) and date range."""
+    encoded_proj = url_quote(x_gitlab_project, safe="")
+    base = f"{x_gitlab_url.rstrip('/')}/api/v4/projects/{encoded_proj}/repository/commits"
+    headers = _gl_headers(x_gitlab_token)
+    author_list = [a.strip() for a in authors.split(",") if a.strip()]
+
+    all_commits: list = []
+    seen_shas: set = set()
+
+    targets = author_list if author_list else [None]
+    for author in targets:
+        params: dict = {}
+        if author:
+            params["author"] = author
+        if since:
+            params["since"] = f"{since}T00:00:00Z"
+        if until:
+            params["until"] = f"{until}T23:59:59Z"
+
+        try:
+            batch = _gl_paginate(base, headers, params, max_items=500)
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.warning("GitLab commits for author=%s failed: %s", author, e)
+            continue
+
+        for c in batch:
+            sha = c.get("id", "")
+            if sha in seen_shas:
+                continue
+            seen_shas.add(sha)
+
+            web_url = c.get("web_url", "")
+            if not web_url:
+                web_url = (
+                    f"{x_gitlab_url.rstrip('/')}/{x_gitlab_project}/-/commit/{sha}"
+                )
+
+            all_commits.append({
+                "sha":         sha,
+                "author":      c.get("author_name", "unknown"),
+                "authorEmail": c.get("author_email", ""),
+                "message":     (c.get("title") or c.get("message", "")).split("\n")[0],
+                "date":        c.get("authored_date") or c.get("created_at", ""),
+                "url":         web_url,
+            })
+
+    all_commits.sort(key=lambda x: x["date"], reverse=True)
+    log.info("Returning %d GitLab commits", len(all_commits))
+    return {"commits": all_commits, "total": len(all_commits)}
+
+
+@app.get("/api/gitlab/mrs")
+def gitlab_mrs(
+    authors:   str           = Query(""),
+    since:     Optional[str] = Query(None),
+    until:     Optional[str] = Query(None),
+    x_gitlab_url:     str = Header(...),
+    x_gitlab_token:   str = Header(...),
+    x_gitlab_project: str = Header(...),
+):
+    """Compute per-author MR metrics from a GitLab project."""
+    encoded_proj = url_quote(x_gitlab_project, safe="")
+    mr_base = f"{x_gitlab_url.rstrip('/')}/api/v4/projects/{encoded_proj}/merge_requests"
+    headers = _gl_headers(x_gitlab_token)
+    author_list = [a.strip() for a in authors.split(",") if a.strip()]
+    if not author_list:
+        return {"metrics": {}}
+
+    metrics: dict = {}
+
+    for author in author_list:
+        params_opened: dict = {"author_username": author, "state": "all"}
+        params_merged: dict = {"author_username": author, "state": "merged"}
+        params_reviewed: dict = {"reviewer_username": author, "state": "all"}
+
+        if since:
+            params_opened["created_after"] = f"{since}T00:00:00Z"
+            params_merged["merged_after"] = f"{since}T00:00:00Z"
+            params_reviewed["created_after"] = f"{since}T00:00:00Z"
+        if until:
+            params_opened["created_before"] = f"{until}T23:59:59Z"
+            params_merged["merged_before"] = f"{until}T23:59:59Z"
+            params_reviewed["created_before"] = f"{until}T23:59:59Z"
+
+        try:
+            opened  = _gl_paginate(mr_base, headers, params_opened, max_items=300)
+            merged  = _gl_paginate(mr_base, headers, params_merged, max_items=300)
+            reviewed = _gl_paginate(mr_base, headers, params_reviewed, max_items=300)
+        except Exception as e:
+            log.warning("GitLab MR fetch for %s failed: %s", author, e)
+            metrics[author] = {
+                "mrsOpened": 0, "mrsMerged": 0, "mrsReviewed": 0,
+                "avgCycleTimeDays": None, "reviewNotes": 0,
+            }
+            continue
+
+        cycle_times = []
+        for mr in merged:
+            created = mr.get("created_at")
+            merged_at = mr.get("merged_at")
+            if created and merged_at:
+                try:
+                    c_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    m_dt = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+                    cycle_times.append((m_dt - c_dt).total_seconds() / 86400)
+                except (ValueError, TypeError):
+                    pass
+
+        avg_cycle = (
+            round(sum(cycle_times) / len(cycle_times), 1)
+            if cycle_times else None
+        )
+
+        # Count notes (review comments) on the author's opened MRs
+        review_notes = 0
+        for mr in opened[:50]:
+            notes_url = f"{mr_base}/{mr['iid']}/notes"
+            try:
+                notes = _gl_paginate(notes_url, headers, {"sort": "asc"}, max_items=100)
+                review_notes += sum(
+                    1 for n in notes
+                    if not n.get("system", False)
+                    and (n.get("author", {}).get("username", "") != author)
+                )
+            except Exception:
+                pass
+
+        metrics[author] = {
+            "mrsOpened":        len(opened),
+            "mrsMerged":        len(merged),
+            "mrsReviewed":      len(reviewed),
+            "avgCycleTimeDays": avg_cycle,
+            "reviewNotes":      review_notes,
+        }
+
+    log.info("GitLab MR metrics for %d authors", len(metrics))
+    return {"metrics": metrics}

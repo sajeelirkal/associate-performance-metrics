@@ -1,11 +1,15 @@
-const REPO_OWNER = 'Azure';
-const REPO_NAME = 'ARO-HCP';
 const BASE_URL = 'https://api.github.com';
 
 function buildHeaders(token) {
   const headers = { Accept: 'application/vnd.github+json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
+}
+
+function parseRepo(repoFullName) {
+  const [owner, name] = (repoFullName || '').split('/');
+  if (!owner || !name) throw new Error('GitHub repo must be in owner/name format');
+  return { owner, name };
 }
 
 async function fetchAllPages(url, headers) {
@@ -27,8 +31,9 @@ async function fetchAllPages(url, headers) {
   return results;
 }
 
-export async function fetchContributors(token) {
-  const url = `${BASE_URL}/repos/${REPO_OWNER}/${REPO_NAME}/contributors`;
+export async function fetchContributors(token, repoFullName) {
+  const { owner, name } = parseRepo(repoFullName);
+  const url = `${BASE_URL}/repos/${owner}/${name}/contributors`;
   const data = await fetchAllPages(url, buildHeaders(token));
   return data.map((c) => ({
     login: c.login,
@@ -37,14 +42,15 @@ export async function fetchContributors(token) {
   }));
 }
 
-export async function fetchCommits(token, authors = [], since = null, until = null) {
+export async function fetchCommits(token, repoFullName, authors = [], since = null, until = null) {
+  const { owner, name } = parseRepo(repoFullName);
   const headers = buildHeaders(token);
   let allCommits = [];
 
   const targets = authors.length > 0 ? authors : [null];
 
   for (const author of targets) {
-    let url = `${BASE_URL}/repos/${REPO_OWNER}/${REPO_NAME}/commits?`;
+    let url = `${BASE_URL}/repos/${owner}/${name}/commits?`;
     if (author) url += `author=${author}&`;
     if (since) url += `since=${new Date(since).toISOString()}&`;
     if (until) {
@@ -66,7 +72,6 @@ export async function fetchCommits(token, authors = [], since = null, until = nu
     );
   }
 
-  // Deduplicate by sha
   const seen = new Set();
   return allCommits.filter((c) => {
     if (seen.has(c.sha)) return false;
@@ -84,14 +89,13 @@ async function searchGitHub(headers, query, maxItems = 300) {
   while (results.length < maxItems) {
     const url = `${BASE_URL}/search/issues?q=${encodeURIComponent(query)}&per_page=100&page=${page}`;
     const res = await fetch(url, { headers });
-    if (res.status === 422) break; // query too complex / no results
+    if (res.status === 422) break;
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       if (res.status === 403 || res.status === 429) {
-        // Throw so callers can detect rate-limiting
         throw new Error('rate limit exceeded — connect GitHub to increase quota');
       }
-      break; // any other error: return what we have so far
+      break;
     }
     const data = await res.json();
     const items = data.items ?? [];
@@ -107,22 +111,18 @@ async function searchGitHub(headers, query, maxItems = 300) {
  * Returns a map: { [login]: { prsOpened, prsMerged, prsReviewed, prsChurned,
  *                             avgCycleTimeDays, churnPct, reviewComments } }
  */
-export async function fetchPRMetrics(token, authors = [], since = null, until = null) {
+export async function fetchPRMetrics(token, repoFullName, authors = [], since = null, until = null) {
   if (!authors.length) return {};
+  const { owner, name } = parseRepo(repoFullName);
   const headers = buildHeaders(token);
-  const repo = `repo:${REPO_OWNER}/${REPO_NAME}`;
-  // Space-separated so encodeURIComponent turns it into %20 — a proper qualifier
-  // separator in GitHub search. Using `+` here causes %2B after encoding, which
-  // GitHub decodes as a literal + and merges with the previous qualifier value.
-  const dateRange = since ? ` created:${since}..${until ?? '*'}` : '';
+  const repo = `repo:${owner}/${name}`;
+  const createdRange = since ? ` created:${since}..${until ?? '*'}` : '';
+  const mergedRange  = since ? ` merged:${since}..${until ?? '*'}`  : '';
 
-  // Fetch review comments in a capped way (max 5 pages = 500 comments) to
-  // avoid exhausting the rate-limit budget before the search queries run.
-  // We still use the since-filter so old comments are excluded.
   let allReviewComments = [];
   try {
     const sinceParam = since ? `?since=${new Date(since).toISOString()}` : '';
-    const rcBase = `${BASE_URL}/repos/${REPO_OWNER}/${REPO_NAME}/pulls/comments${sinceParam}`;
+    const rcBase = `${BASE_URL}/repos/${owner}/${name}/pulls/comments${sinceParam}`;
     for (let page = 1; page <= 10; page++) {
       const sep = rcBase.includes('?') ? '&' : '?';
       const res = await fetch(`${rcBase}${sep}per_page=100&page=${page}`, { headers });
@@ -132,9 +132,8 @@ export async function fetchPRMetrics(token, authors = [], since = null, until = 
       allReviewComments = allReviewComments.concat(chunk);
       if (chunk.length < 100) break;
     }
-  } catch { /* non-fatal — churn/review-comments just won't show */ }
+  } catch { /* non-fatal */ }
 
-  // Build a lookup: PR number → Set of commenters
   const prCommenters = new Map();
   for (const rc of allReviewComments) {
     const prNum = parseInt(rc.pull_request_url?.split('/').pop(), 10);
@@ -149,36 +148,30 @@ export async function fetchPRMetrics(token, authors = [], since = null, until = 
 
   for (const author of authors) {
     if (rateLimited) {
-      // If we already know we're rate-limited, mark remaining authors and stop
       metrics[author] = { _rateLimited: true, prsOpened:0, prsMerged:0, prsReviewed:0, prsChurned:0, avgCycleTimeDays:null, churnPct:0, reviewComments:0 };
       continue;
     }
 
-    // Run 3 searches sequentially (not parallel) to stay well inside the
-    // GitHub search rate limit of 30 authenticated / 10 unauthenticated req/min.
     let openedItems = [], mergedItems = [], reviewedItems = [];
 
-    try { openedItems   = await searchGitHub(headers, `${repo} is:pr author:${author}${dateRange}`); }
+    try { openedItems   = await searchGitHub(headers, `${repo} is:pr author:${author}${createdRange}`); }
     catch (e) { if (String(e).includes('rate limit')) { rateLimited = true; } }
 
-    try { mergedItems   = await searchGitHub(headers, `${repo} is:pr is:merged author:${author}${dateRange}`); }
+    try { mergedItems   = await searchGitHub(headers, `${repo} is:pr is:merged author:${author}${mergedRange}`); }
     catch (e) { if (String(e).includes('rate limit')) { rateLimited = true; } }
 
-    try { reviewedItems = await searchGitHub(headers, `${repo} is:pr reviewed-by:${author}${dateRange}`); }
+    try { reviewedItems = await searchGitHub(headers, `${repo} is:pr reviewed-by:${author}${createdRange}`); }
     catch (e) { if (String(e).includes('rate limit')) { rateLimited = true; } }
 
-    // Avg PR cycle time (open → merge) in days
     const cycleTimes = mergedItems
       .filter(pr => pr.pull_request?.merged_at && pr.created_at)
       .map(pr => (new Date(pr.pull_request.merged_at) - new Date(pr.created_at)) / 86_400_000);
 
-    // Review comments LEFT by this author (counted from the comments we fetched)
     const authorLower = author.toLowerCase();
     const reviewComments = allReviewComments.filter(
       c => c.user?.login?.toLowerCase() === authorLower
     ).length;
 
-    // Churn = opened PRs that received review comments from someone other than the author
     const prsChurned = openedItems.filter(pr => {
       const commenters = prCommenters.get(pr.number);
       if (!commenters || commenters.size === 0) return false;
@@ -201,16 +194,15 @@ export async function fetchPRMetrics(token, authors = [], since = null, until = 
     };
   }
 
-  // Attach a top-level flag so the UI can warn the user
   metrics._rateLimited = rateLimited;
   return metrics;
 }
 
-export async function fetchContributorStats(token) {
-  const url = `${BASE_URL}/repos/${REPO_OWNER}/${REPO_NAME}/stats/contributors`;
+export async function fetchContributorStats(token, repoFullName) {
+  const { owner, name } = parseRepo(repoFullName);
+  const url = `${BASE_URL}/repos/${owner}/${name}/stats/contributors`;
   const headers = buildHeaders(token);
 
-  // GitHub may return 202 while computing stats; retry up to 5 times
   for (let attempt = 0; attempt < 5; attempt++) {
     const res = await fetch(url, { headers });
     if (res.status === 202) {

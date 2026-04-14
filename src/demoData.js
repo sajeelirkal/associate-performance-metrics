@@ -1,5 +1,5 @@
 /**
- * Demo data for ARO-HCP Team Dashboard — peer manager review demo.
+ * Demo data for Associate Performance Metrics — sample review demo.
  *
  * Performance spread (clear top → bottom):
  *   alice-dev  ★★★★★  top performer
@@ -31,7 +31,7 @@ let _sha = 2000;
 const sha = () => (++_sha).toString(16).padStart(40, '0');
 
 let _key = 600;
-const jkey = () => `AROSLSRE-${++_key}`;
+const jkey = () => `DEMO-${++_key}`;
 
 const avatar = (u) => `https://avatars.githubusercontent.com/u/${u}?v=4`;
 
@@ -53,7 +53,7 @@ function commits(author, entries) {
     authorAvatar: DEMO_CONTRIBUTORS.find(c => c.login === author)?.avatarUrl ?? null,
     message,
     date: daysAgo(day, hour),
-    url: `https://github.com/Azure/ARO-HCP/commit/${sha()}`,
+    url: `https://github.com/example-org/example-repo/commit/${sha()}`,
   }));
 }
 
@@ -225,14 +225,14 @@ function issue({
   const resolvedDate   = resolved != null ? daysAgo(resolved) : null;
   return {
     key:             jkey(),
-    url:             `https://issues.redhat.com/browse/AROSLSRE-${_key}`,
+    url:             `https://jira.example.com/browse/DEMO-${_key}`,
     summary,
     status,
     statusCategory:  statusCat,
     priority,
     issueType:       type,
     assigneeJira:    jiraUser,
-    assigneeEmail:   `${jiraUser.replace('.', '@')}redhat.com`,
+    assigneeEmail:   `${jiraUser.replace('.', '@')}example.com`,
     assigneeDisplay: jiraUser.split('.').map(w => w[0].toUpperCase() + w.slice(1)).join(' '),
     created:         daysAgo(createdDaysAgo),
     updated:         daysAgo(1),
@@ -261,7 +261,7 @@ export const DEMO_PR_METRICS = {
 export const DEMO_JIRA_ISSUES = [
 
   // ── alice.smith  (9 done · 2 open · 0 spillovers · 42 SP) ─── TOP ──────────
-  issue({ jiraUser:'alice.smith', summary:'mTLS support for cluster-service API',         status:'Done',        statusCat:'Done',        daysOpen:12, resolved:4,  spillovers:0, storyPoints:8,  sprint:22, githubLinks:['https://github.com/Azure/ARO-HCP/commit/aa1'] }),
+  issue({ jiraUser:'alice.smith', summary:'mTLS support for cluster-service API',         status:'Done',        statusCat:'Done',        daysOpen:12, resolved:4,  spillovers:0, storyPoints:8,  sprint:22, githubLinks:['https://github.com/example-org/example-repo/commit/aa1'] }),
   issue({ jiraUser:'alice.smith', summary:'OIDC provider health-check endpoint',           status:'Done',        statusCat:'Done',        daysOpen:9,  resolved:10, spillovers:0, storyPoints:5,  sprint:21 }),
   issue({ jiraUser:'alice.smith', summary:'JWT validation middleware refactor',             status:'Done',        statusCat:'Done',        daysOpen:7,  resolved:16, spillovers:0, storyPoints:3,  sprint:21 }),
   issue({ jiraUser:'alice.smith', summary:'Prometheus metrics for API latency p50/p99',    status:'Done',        statusCat:'Done',        daysOpen:8,  resolved:22, spillovers:0, storyPoints:5,  sprint:20 }),
@@ -293,7 +293,7 @@ export const DEMO_JIRA_ISSUES = [
   issue({ jiraUser:'carol.wilson', summary:'Etcd member health in status API',            status:'To Do',       statusCat:'To Do',       daysOpen:3,  spillovers:0, storyPoints:3,  sprint:22 }),
 
   // ── eve.taylor  (3 done · 2 open · 3 spillovers · 11 SP) ─── BELOW MID ─────
-  issue({ jiraUser:'eve.taylor', summary:'Private Link service auto-configuration',        status:'Done',        statusCat:'Done',        daysOpen:15, resolved:7,  spillovers:1, storyPoints:5,  sprint:22, githubLinks:['https://github.com/Azure/ARO-HCP/commit/ee1'] }),
+  issue({ jiraUser:'eve.taylor', summary:'Private Link service auto-configuration',        status:'Done',        statusCat:'Done',        daysOpen:15, resolved:7,  spillovers:1, storyPoints:5,  sprint:22, githubLinks:['https://github.com/example-org/example-repo/commit/ee1'] }),
   issue({ jiraUser:'eve.taylor', summary:'UDR applied correctly on first cluster create', status:'Done',        statusCat:'Done',        daysOpen:10, resolved:20, spillovers:1, storyPoints:3,  sprint:21, priority:'High' }),
   issue({ jiraUser:'eve.taylor', summary:'Egress SNAT fix for large node pools',          status:'Done',        statusCat:'Done',        daysOpen:8,  resolved:34, spillovers:1, storyPoints:3,  sprint:21, priority:'High' }),
   issue({ jiraUser:'eve.taylor', summary:'BYO DNS zone support for private clusters',     status:'In Progress', statusCat:'In Progress', daysOpen:22, daysProgress:18, spillovers:3, storyPoints:5, sprint:22 }),
