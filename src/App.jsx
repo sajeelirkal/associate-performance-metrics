@@ -1027,7 +1027,7 @@ export default function App() {
         commitsPerIssue: doneIssues.length ? ((ghCommits.length + myGlCommits.length) / doneIssues.length).toFixed(1) : '—',
         lastCommit,
       };
-    }).filter(p => p.commits > 0 || p.glCommits > 0 || p.issuesTotal > 0);
+    }).filter(p => p.commits > 0 || p.glCommits > 0 || p.glMRsOpened > 0 || p.glMRsMerged > 0 || p.glMRsReviewed > 0 || p.issuesTotal > 0);
   }, [userMapping, associateList, commits, glCommits, glMRMetrics, jiraIssues, issueMatchesAssignee, glCommitMatchesAssociate]);
 
   // ── Work summary (narrative) per associate ────────────────────────────────
