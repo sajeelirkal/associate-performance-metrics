@@ -20,7 +20,7 @@ async function backendFetch(path, jiraUrl, token, email, params = {}) {
 
   let res;
   try {
-    res = await fetch(url.toString(), { headers });
+    res = await fetch(url.toString(), { headers, cache: 'no-store' });
   } catch {
     throw new Error(
       'Cannot reach the Python backend at localhost:8000.\n' +
@@ -64,13 +64,15 @@ export async function resolveJiraUser(jiraUrl, token, email, query) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export async function fetchJiraIssues(jiraUrl, token, email, jiraUsernames, since, until) {
+export async function fetchJiraIssues(jiraUrl, token, email, jiraUsernames, since, until, spField = null) {
   if (!jiraUsernames.length) return [];
-  const data = await backendFetch('/issues', jiraUrl, token, email, {
+  const params = {
     usernames: jiraUsernames.join(','),
     since,
     until,
-  });
+  };
+  if (spField) params.sp_field = spField;
+  const data = await backendFetch('/issues', jiraUrl, token, email, params);
   return data.issues ?? [];
 }
 
@@ -135,7 +137,28 @@ export function calcCycleTime(issue) {
 }
 
 // ── Normalise raw Jira issue → flat object ────────────────────────────────────
-export function normaliseIssue(raw) {
+
+const SP_CANDIDATES = [
+  'customfield_10028',       // "Story Points" (Red Hat / common)
+  'story_points',            // native field (newer Jira Cloud)
+  'customfield_10016',       // "Story point estimate" (Jira Cloud default)
+  'customfield_10506',       // "DEV Story Points"
+  'customfield_10510',       // "DOC Story Points"
+  'customfield_10572',       // "QE Story Points"
+  'customfield_10977',       // "Original story points"
+  'customfield_10004',       // some instances
+  'customfield_12310243',    // Red Hat Jira (legacy)
+];
+
+function extractStoryPoints(fields, spField) {
+  if (spField && fields[spField] != null) return fields[spField];
+  for (const id of SP_CANDIDATES) {
+    if (fields[id] != null) return fields[id];
+  }
+  return null;
+}
+
+export function normaliseIssue(raw, spField = null) {
   const f           = raw.fields;
   const sprints     = parseSprints(f.customfield_10020);
   return {
@@ -157,7 +180,7 @@ export function normaliseIssue(raw) {
     daysInProgress:  calcDaysInProgress(raw.changelog),
     spillovers:      calcSprintSpillovers(raw.changelog),
     cycleTime:       calcCycleTime(raw),
-    storyPoints:     f.customfield_10016 ?? null,
+    storyPoints:     extractStoryPoints(f, spField),
     remoteLinks:     [],
   };
 }

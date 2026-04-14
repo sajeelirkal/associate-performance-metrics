@@ -12,6 +12,9 @@ import {
   fetchJiraIssues, fetchRemoteLinksForIssues, normaliseIssue, checkBackendHealth, resolveJiraUser,
 } from './jira';
 import {
+  testGitLabConnection, fetchGitLabCommits, fetchGitLabMRMetrics,
+} from './gitlab';
+import {
   DEMO_CONTRIBUTORS, DEMO_COMMITS, DEMO_JIRA_ISSUES, DEMO_MAPPINGS, DEMO_ASSOCIATES, DEMO_PR_METRICS,
 } from './demoData';
 import './App.css';
@@ -182,6 +185,20 @@ function CalendarIcon({ size = 13 }) {
   );
 }
 
+function GitLabIcon({ size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
+      <path d="M16 29.15L21.06 13.5H10.94L16 29.15Z" fill="#E24329"/>
+      <path d="M16 29.15L10.94 13.5H3.28L16 29.15Z" fill="#FC6D26"/>
+      <path d="M3.28 13.5L1.58 18.74a1.08 1.08 0 00.39 1.21L16 29.15 3.28 13.5Z" fill="#FCA326"/>
+      <path d="M3.28 13.5h7.66L7.63 3.28a.54.54 0 00-1.03 0L3.28 13.5Z" fill="#E24329"/>
+      <path d="M16 29.15L21.06 13.5h7.66L16 29.15Z" fill="#FC6D26"/>
+      <path d="M28.72 13.5l1.7 5.24a1.08 1.08 0 01-.39 1.21L16 29.15l12.72-15.65Z" fill="#FCA326"/>
+      <path d="M28.72 13.5h-7.66l3.31-10.22a.54.54 0 011.03 0l3.32 10.22Z" fill="#E24329"/>
+    </svg>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState('github');
@@ -190,7 +207,7 @@ export default function App() {
 
   const switchTab = useCallback(async (t) => {
     setTab(t);
-    if (t === 'jira' || t === 'performance' || t === 'settings') {
+    if (t === 'jira' || t === 'gitlab' || t === 'performance' || t === 'settings') {
       try {
         const res = await fetch('/api/health', { signal: AbortSignal.timeout(4000) });
         if (res.ok) {
@@ -208,6 +225,7 @@ export default function App() {
 
   // ── Shared config ──
   const [token,      setToken]      = useState(() => localStorage.getItem('gh_token') || '');
+  const [ghRepo,     setGhRepo]     = useState(() => localStorage.getItem('gh_repo') || '');
   const [associates, setAssociates] = useState(() => localStorage.getItem('gh_associates') || '');
   const [sinceDate,  setSinceDate]  = useState(() => currentQuarterStart());
   const [untilDate,  setUntilDate]  = useState(() => new Date());
@@ -218,7 +236,7 @@ export default function App() {
   const [activeAssociate, setActiveAssociate] = useState(null); // github username
 
   // ── Jira config ──
-  const [jiraBase,   setJiraBase]   = useState(() => localStorage.getItem('jira_base')  || 'https://redhat.atlassian.net');
+  const [jiraBase,   setJiraBase]   = useState(() => localStorage.getItem('jira_base')  || '');
   const [jiraEmail,  setJiraEmail]  = useState(() => localStorage.getItem('jira_email') || '');
   const [jiraApiKey, setJiraApiKey] = useState(() => localStorage.getItem('jira_key')   || '');
 
@@ -231,7 +249,7 @@ export default function App() {
     } catch { return []; }
   });
 
-  const addMappingRow    = () => setMappings(m => [...m, { github: '', jira: '', jiraDisplay: '' }]);
+  const addMappingRow    = () => setMappings(m => [...m, { github: '', gitlab: '', jira: '', jiraDisplay: '' }]);
   const removeMappingRow = (i) => setMappings(m => m.filter((_, idx) => idx !== i));
   const updateMapping    = (i, field, val) =>
     setMappings(m => m.map((row, idx) => {
@@ -283,6 +301,22 @@ export default function App() {
   const togglePerson = (github) =>
     setCollapsedPersons(s => ({ ...s, [github]: !s[github] }));
 
+  // ── GitLab config ──
+  const [glUrl,     setGlUrl]     = useState(() => localStorage.getItem('gl_url')     || '');
+  const [glToken,   setGlToken]   = useState(() => localStorage.getItem('gl_token')   || '');
+  const [glProject, setGlProject] = useState(() => localStorage.getItem('gl_project') || '');
+
+  // ── GitLab state ──
+  const [glCommits,    setGlCommits]    = useState([]);
+  const [glMRMetrics,  setGlMRMetrics]  = useState({});
+  const [glLoading,    setGlLoading]    = useState(false);
+  const [glError,      setGlError]      = useState(null);
+  const [glFetched,    setGlFetched]    = useState(false);
+  const [glSearchMsg,  setGlSearchMsg]  = useState('');
+  const [glPage,       setGlPage]       = useState(1);
+  const [glTestStatus, setGlTestStatus] = useState(null);
+  const [glTestMsg,    setGlTestMsg]    = useState('');
+
   const PAGE_SIZE = 25;
 
   // ── Persist ──
@@ -310,10 +344,14 @@ export default function App() {
   }, []);
 
   useEffect(() => { localStorage.setItem('gh_token',      token);                     }, [token]);
+  useEffect(() => { localStorage.setItem('gh_repo',       ghRepo);                    }, [ghRepo]);
   useEffect(() => { localStorage.setItem('gh_associates', associates);                }, [associates]);
   useEffect(() => { localStorage.setItem('jira_base',     jiraBase);                  }, [jiraBase]);
   useEffect(() => { localStorage.setItem('jira_email',    jiraEmail);                 }, [jiraEmail]);
   useEffect(() => { localStorage.setItem('jira_key',      jiraApiKey);                }, [jiraApiKey]);
+  useEffect(() => { localStorage.setItem('gl_url',        glUrl);                     }, [glUrl]);
+  useEffect(() => { localStorage.setItem('gl_token',      glToken);                   }, [glToken]);
+  useEffect(() => { localStorage.setItem('gl_project',    glProject);                 }, [glProject]);
   const [mappingSaved, setMappingSaved] = useState(false);
   useEffect(() => {
     localStorage.setItem('user_mapping', JSON.stringify(mappings));
@@ -325,17 +363,19 @@ export default function App() {
   // ── Export / Import config ──
   const handleExportConfig = useCallback(() => {
     const config = {
+      ghRepo,
       jiraBase, jiraEmail,
+      glUrl, glProject,
       mappings,
       ghAssociates: associates,
     };
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'aro-hcp-config.json';
+    a.download = 'team-dashboard-config.json';
     a.click();
     URL.revokeObjectURL(a.href);
-  }, [jiraBase, jiraEmail, mappings, associates]);
+  }, [ghRepo, jiraBase, jiraEmail, glUrl, glProject, mappings, associates]);
 
   const handleImportConfig = useCallback((e) => {
     const file = e.target.files?.[0];
@@ -344,8 +384,11 @@ export default function App() {
     reader.onload = (ev) => {
       try {
         const cfg = JSON.parse(ev.target.result);
+        if (cfg.ghRepo)      setGhRepo(cfg.ghRepo);
         if (cfg.jiraBase)    setJiraBase(cfg.jiraBase);
         if (cfg.jiraEmail)   setJiraEmail(cfg.jiraEmail);
+        if (cfg.glUrl)       setGlUrl(cfg.glUrl);
+        if (cfg.glProject)   setGlProject(cfg.glProject);
         if (Array.isArray(cfg.mappings) && cfg.mappings.length) setMappings(cfg.mappings);
         if (cfg.ghAssociates) setAssociates(cfg.ghAssociates);
       } catch { alert('Invalid config file'); }
@@ -382,6 +425,43 @@ export default function App() {
     return associateList.map(g => ({ github: g, jira: g }));
   }, [userMapping, associateList]);
 
+  // GitLab usernames derived from mapping (gitlab field) or fallback to associateList
+  const glUsernames = useMemo(() => {
+    if (userMapping.length) return userMapping.map(m => m.gitlab || m.github).filter(Boolean);
+    return associateList;
+  }, [userMapping, associateList]);
+
+  // Returns true if the string looks like a machine identifier rather than a human name
+  const looksLikeId = (s) => {
+    if (!s) return true;
+    if (s.includes('@')) return true;
+    // Jira accountId pattern: "70121:6a412bae-ecf5-4dcb-b196-ff1d4375d5f6"
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-/.test(s)) return true;
+    // Pure numeric
+    if (/^\d+$/.test(s)) return true;
+    // Digits-colon-something (e.g. "70121:...")
+    if (/^\d+:/.test(s)) return true;
+    return false;
+  };
+
+  // Extract the human-readable portion from a jiraDisplay value
+  // (handles legacy "Name · email" format stored in localStorage)
+  const cleanDisplayName = (raw) => {
+    if (!raw) return null;
+    const name = raw.includes(' · ') ? raw.split(' · ')[0].trim() : raw;
+    return (name && !looksLikeId(name)) ? name : null;
+  };
+
+  // Resolve a GitHub login to a human-readable display name (Jira full name when available)
+  const ghDisplayName = useCallback((ghLogin) => {
+    if (!ghLogin) return '';
+    const row = userMapping.find(m => m.github?.toLowerCase() === ghLogin.toLowerCase());
+    const fromDisplay = cleanDisplayName(row?.jiraDisplay);
+    if (fromDisplay) return fromDisplay;
+    if (row?.jira && !looksLikeId(row.jira)) return row.jira;
+    return ghLogin;
+  }, [userMapping]);
+
   const applyQuickRange = (days) => {
     setSinceDate(subDays(new Date(), days));
     setUntilDate(new Date());
@@ -392,9 +472,9 @@ export default function App() {
     setGhError(null); setGhLoading(true); setGhFetched(false);
     try {
       const [contribs, rawCommits, prMeta] = await Promise.all([
-        fetchContributors(token),
-        fetchCommits(token, associateList, since, until),
-        fetchPRMetrics(token, associateList, since, until).catch(() => ({})),
+        fetchContributors(token, ghRepo),
+        fetchCommits(token, ghRepo, associateList, since, until),
+        fetchPRMetrics(token, ghRepo, associateList, since, until).catch(() => ({})),
       ]);
       const relevantLogins = new Set(associateList.map(a => a.toLowerCase()));
       setContributors(
@@ -414,11 +494,14 @@ export default function App() {
       setSelectedAuthors([]); setGhPage(1); setGhFetched(true);
     } catch (e) { setGhError(e.message); }
     finally { setGhLoading(false); }
-  }, [token, associateList, since, until]);
+  }, [token, ghRepo, associateList, since, until]);
 
   // ── Jira test connection ──────────────────────────────────────────────────
   const [jiraTestStatus, setJiraTestStatus] = useState(null); // null | 'ok' | 'error'
   const [jiraTestMsg,    setJiraTestMsg]    = useState('');
+  const [spField,        setSpField]        = useState(() => localStorage.getItem('jira_sp_field') || '');
+
+  useEffect(() => { localStorage.setItem('jira_sp_field', spField); }, [spField]);
 
   const handleTestJira = useCallback(async () => {
     setJiraTestStatus(null); setJiraTestMsg(''); setJiraError(null);
@@ -441,7 +524,8 @@ export default function App() {
         setJiraTestMsg(data.detail || text.slice(0, 300) || `HTTP ${res.status}`);
       } else {
         setJiraTestStatus('ok');
-        setJiraTestMsg(`Connected as: ${data.user}`);
+        let msg = `Connected as: ${data.user}`;
+        setJiraTestMsg(msg);
       }
     } catch (e) {
       setJiraTestStatus('error');
@@ -453,8 +537,8 @@ export default function App() {
   const handleFetchJira = useCallback(async () => {
     setJiraError(null); setJiraLoading(true); setJiraFetched(false);
     try {
-      const raw = await fetchJiraIssues(jiraBase, jiraApiKey, jiraEmail, jiraUsernames, since, until);
-      const issues = raw.map(normaliseIssue);
+      const raw = await fetchJiraIssues(jiraBase, jiraApiKey, jiraEmail, jiraUsernames, since, until, spField);
+      const issues = raw.map(i => normaliseIssue(i, spField));
       setJiraIssues(issues);
       const keys = issues.map(i => i.key);
       fetchRemoteLinksForIssues(jiraBase, jiraApiKey, jiraEmail, keys)
@@ -463,14 +547,42 @@ export default function App() {
       setJiraPage(1); setJiraFetched(true);
     } catch (e) { setJiraError(e.message); }
     finally { setJiraLoading(false); }
-  }, [jiraBase, jiraApiKey, jiraEmail, jiraUsernames, since, until]);
+  }, [jiraBase, jiraApiKey, jiraEmail, jiraUsernames, since, until, spField]);
+
+  // ── GitLab test connection ──────────────────────────────────────────────
+  const handleTestGitLab = useCallback(async () => {
+    setGlTestStatus(null); setGlTestMsg(''); setGlError(null);
+    try {
+      const data = await testGitLabConnection(glUrl, glToken);
+      setGlTestStatus('ok');
+      setGlTestMsg(`Connected as: ${data.user}`);
+    } catch (e) {
+      setGlTestStatus('error');
+      setGlTestMsg(e.message);
+    }
+  }, [glUrl, glToken]);
+
+  // ── GitLab fetch ──────────────────────────────────────────────────────
+  const handleFetchGitLab = useCallback(async () => {
+    setGlError(null); setGlLoading(true); setGlFetched(false);
+    try {
+      const [rawCommits, mrMeta] = await Promise.all([
+        fetchGitLabCommits(glUrl, glToken, glProject, glUsernames, since, until),
+        fetchGitLabMRMetrics(glUrl, glToken, glProject, glUsernames, since, until).catch(() => ({})),
+      ]);
+      setGlCommits(rawCommits.sort((a, b) => new Date(b.date) - new Date(a.date)));
+      setGlMRMetrics(mrMeta);
+      setGlPage(1); setGlFetched(true);
+    } catch (e) { setGlError(e.message); }
+    finally { setGlLoading(false); }
+  }, [glUrl, glToken, glProject, glUsernames, since, until]);
 
   // ── Fetch everything at once ──────────────────────────────────────────────
-  const fetchAllLoading = ghLoading || jiraLoading;
+  const fetchAllLoading = ghLoading || jiraLoading || glLoading;
 
   const handleFetchAll = useCallback(async () => {
-    await Promise.allSettled([handleFetchGitHub(), handleFetchJira()]);
-  }, [handleFetchGitHub, handleFetchJira]);
+    await Promise.allSettled([handleFetchGitHub(), handleFetchJira(), handleFetchGitLab()]);
+  }, [handleFetchGitHub, handleFetchJira, handleFetchGitLab]);
 
   const handleLoadDemo = useCallback(() => {
     setCommits(DEMO_COMMITS);
@@ -574,10 +686,180 @@ export default function App() {
     if (!isoDate) return;
     const authors = selectedAuthors.length === 1 ? `&author=${selectedAuthors[0]}` : '';
     window.open(
-      `https://github.com/Azure/ARO-HCP/commits/main/?since=${isoDate}T00:00:00Z&until=${isoDate}T23:59:59Z${authors}`,
+      `https://github.com/${ghRepo}/commits/main/?since=${isoDate}T00:00:00Z&until=${isoDate}T23:59:59Z${authors}`,
       '_blank', 'noreferrer'
     );
   }, [selectedAuthors]);
+
+  // ── GitLab derived data ─────────────────────────────────────────────────
+
+  // Helper: resolve a github login to the gitlab username from the mapping
+  const ghToGl = useCallback((ghLogin) => {
+    const row = userMapping.find(m => m.github?.toLowerCase() === ghLogin?.toLowerCase());
+    return row?.gitlab || ghLogin;
+  }, [userMapping]);
+
+  // Build a lookup: github login → Set of lowercase strings that could match
+  // a GitLab commit's author name or author email.  We learn these tokens from
+  // the actual commits so that even if the mapping only has a username, we can
+  // still match by display-name after the first fetch.
+  const glAuthorIndex = useMemo(() => {
+    const people = userMapping.length > 0
+      ? userMapping
+      : associateList.map(g => ({ github: g, jira: g, gitlab: '', jiraDisplay: '' }));
+
+    const index = {};  // { githubLogin: Set<lowercase token> }
+
+    for (const { github, gitlab, jira, jiraDisplay } of people) {
+      const tokens = new Set();
+      const glName = (gitlab || '').toLowerCase();
+      const ghName = (github || '').toLowerCase();
+      if (glName) tokens.add(glName);
+      if (ghName) tokens.add(ghName);
+
+      // Seed with Jira display name and its individual words so that
+      // "Sajeel Irkal" (Jira) matches "Sajeel Irkal" (GitLab author)
+      const cleanJiraName = cleanDisplayName(jiraDisplay);
+      if (cleanJiraName) {
+        tokens.add(cleanJiraName.toLowerCase());
+        cleanJiraName.toLowerCase().split(/\s+/).forEach(w => { if (w.length > 1) tokens.add(w); });
+      }
+
+      // Seed with Jira username if it looks human-readable
+      if (jira && !looksLikeId(jira)) tokens.add(jira.toLowerCase());
+
+      // Scan commits to learn author names and emails for this person.
+      // Also try substring matching: if any seed token is contained within
+      // the commit email prefix or author name, consider it a match.
+      for (const c of glCommits) {
+        const cAuthor = (c.author || '').toLowerCase();
+        const cEmail  = (c.authorEmail || '').toLowerCase();
+        const cPrefix = cEmail.split('@')[0];
+
+        const directMatch = tokens.has(cAuthor) || tokens.has(cEmail) || (cPrefix && tokens.has(cPrefix));
+
+        // Substring: check if any token appears inside the author or email prefix, or vice versa
+        let substringMatch = false;
+        if (!directMatch) {
+          for (const t of tokens) {
+            if (t.length < 2) continue;
+            if ((cAuthor && (cAuthor.includes(t) || t.includes(cAuthor))) ||
+                (cPrefix && cPrefix.length > 1 && (cPrefix.includes(t) || t.includes(cPrefix)))) {
+              substringMatch = true;
+              break;
+            }
+          }
+        }
+
+        // Also check if the commit author name words match the Jira display name words
+        if (!directMatch && !substringMatch && cleanJiraName) {
+          const authorWords = cAuthor.split(/\s+/).filter(w => w.length > 1);
+          const nameWords = cleanJiraName.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+          if (nameWords.length > 0 && authorWords.length > 0) {
+            const overlap = nameWords.filter(w => authorWords.includes(w));
+            if (overlap.length >= Math.min(nameWords.length, authorWords.length)) {
+              substringMatch = true;
+            }
+          }
+        }
+
+        if (directMatch || substringMatch) {
+          if (cAuthor) tokens.add(cAuthor);
+          if (cEmail)  tokens.add(cEmail);
+          if (cPrefix) tokens.add(cPrefix);
+        }
+      }
+      index[github.toLowerCase()] = tokens;
+    }
+    return index;
+  }, [userMapping, associateList, glCommits]);
+
+  const glCommitMatchesAssociate = useCallback((commit, ghLogin) => {
+    const tokens = glAuthorIndex[ghLogin?.toLowerCase()];
+    if (!tokens || tokens.size === 0) return false;
+    const cAuthor = (commit.author || '').toLowerCase();
+    const cEmail  = (commit.authorEmail || '').toLowerCase();
+    const cPrefix = cEmail.split('@')[0];
+    return tokens.has(cAuthor) || tokens.has(cEmail) || (cPrefix && tokens.has(cPrefix));
+  }, [glAuthorIndex]);
+
+  // Unique GL contributors (derived from actual commit data)
+  const glContributors = useMemo(() => {
+    const counts = {};
+    glCommits.forEach(c => {
+      const name = c.author || 'unknown';
+      counts[name] = (counts[name] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([author, total]) => ({ login: author, totalContributions: total }))
+      .sort((a, b) => b.totalContributions - a.totalContributions);
+  }, [glCommits]);
+
+  const glFilteredCommits = useMemo(() => glCommits.filter(c => {
+    if (activeAssociate) {
+      if (!glCommitMatchesAssociate(c, activeAssociate)) return false;
+    }
+    if (glSearchMsg) {
+      const q = glSearchMsg.toLowerCase();
+      if (!c.message.toLowerCase().includes(q) && !c.author.toLowerCase().includes(q)) return false;
+    }
+    return true;
+  }), [glCommits, activeAssociate, glCommitMatchesAssociate, glSearchMsg]);
+
+  const glPagedCommits = useMemo(() => {
+    const s = (glPage - 1) * PAGE_SIZE;
+    return glFilteredCommits.slice(s, s + PAGE_SIZE);
+  }, [glFilteredCommits, glPage]);
+
+  const glCommitsPerDayData = useMemo(() => {
+    if (!glFilteredCommits.length) return [];
+    const counts = {};
+    glFilteredCommits.forEach(c => {
+      const day = c.date ? format(parseISO(c.date), 'yyyy-MM-dd') : null;
+      if (day) counts[day] = (counts[day] || 0) + 1;
+    });
+    return eachDayOfInterval({ start: parseISO(since), end: parseISO(until) }).map(d => {
+      const key = format(d, 'yyyy-MM-dd');
+      return { date: format(d, 'MMM d'), isoDate: key, commits: counts[key] || 0 };
+    });
+  }, [glFilteredCommits, since, until]);
+
+  const glCommitsPerAuthorData = useMemo(() => {
+    const counts = {};
+    glFilteredCommits.forEach(c => { counts[c.author] = (counts[c.author] || 0) + 1; });
+    return Object.entries(counts).map(([author, commits]) => ({ author, commits }))
+      .sort((a, b) => b.commits - a.commits).slice(0, 15);
+  }, [glFilteredCommits]);
+
+  const glWeeklyStackedData = useMemo(() => {
+    if (!glFilteredCommits.length) return { data: [], authors: [] };
+    const authorSet = new Set(); const weeks = {};
+    glFilteredCommits.forEach(c => {
+      if (!c.date) return;
+      const d = parseISO(c.date);
+      const wk = format(startOfDay(d), "yyyy-'W'ww");
+      if (!weeks[wk]) weeks[wk] = { week: format(d, 'MMM d'), _ts: d.getTime() };
+      weeks[wk][c.author] = (weeks[wk][c.author] || 0) + 1;
+      authorSet.add(c.author);
+    });
+    return { data: Object.values(weeks).sort((a, b) => a._ts - b._ts), authors: [...authorSet] };
+  }, [glFilteredCommits]);
+
+  const glDowData = useMemo(() => {
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const counts = Array(7).fill(0);
+    glFilteredCommits.forEach(c => { if (c.date) counts[parseISO(c.date).getDay()]++; });
+    return days.map((day, i) => ({ day, commits: counts[i] }));
+  }, [glFilteredCommits]);
+
+  const glStats = useMemo(() => {
+    const uniqueAuthors = new Set(glFilteredCommits.map(c => c.author)).size;
+    const activeDays = new Set(glFilteredCommits.map(c => c.date?.slice(0,10)).filter(Boolean)).size;
+    return {
+      total: glFilteredCommits.length, uniqueAuthors, activeDays,
+      avgPerDay: activeDays ? (glFilteredCommits.length / activeDays).toFixed(1) : 0,
+    };
+  }, [glFilteredCommits]);
 
   // ── Jira assignee matching helper ─────────────────────────────────────────
   // Matches assigneeJira (username like wehe.openshift) OR assigneeEmail
@@ -676,12 +958,11 @@ export default function App() {
 
         // Pull real name + email from the first matching Jira issue's assignee fields
         const firstIssue    = mine[0];
-        const assigneeName  = firstIssue?.assigneeDisplay || jiraDisplay || github;
+        const rawAssigneeName = cleanDisplayName(firstIssue?.assigneeDisplay) || cleanDisplayName(jiraDisplay) || github;
+        const assigneeName  = (rawAssigneeName && rawAssigneeName !== '—') ? rawAssigneeName : github;
         const assigneeEmail = firstIssue?.assigneeEmail   || '';
-        // Short label for pie slices (name only to avoid overflow)
-        const shortLabel    = assigneeName !== '—' ? assigneeName : github;
-        // Full label used in tooltips (name + email)
-        const fullLabel     = assigneeEmail ? `${shortLabel} (${assigneeEmail})` : shortLabel;
+        const shortLabel    = assigneeName;
+        const fullLabel     = (!looksLikeId(assigneeEmail) && assigneeEmail) ? `${shortLabel} (${assigneeEmail})` : shortLabel;
 
         return { name: github, label: shortLabel, fullLabel, email: assigneeEmail, total: mine.length, done, open, sp };
       })
@@ -693,9 +974,18 @@ export default function App() {
   const perfData = useMemo(() => {
     const people = userMapping.length > 0 ? userMapping : associateList.map(g => ({ github: g, jira: g }));
 
-    return people.map(({ github, jira }) => {
+    return people.map(({ github, jira, gitlab, jiraDisplay }) => {
       const ghCommits  = commits.filter(c => c.author?.toLowerCase() === github?.toLowerCase());
-      const ghActiveDays = new Set(ghCommits.map(c => c.date?.slice(0,10)).filter(Boolean)).size;
+      const ghDates = new Set(ghCommits.map(c => c.date?.slice(0,10)).filter(Boolean));
+      const ghActiveDays = ghDates.size;
+
+      const glName = gitlab || github;
+      const myGlCommits = glCommits.filter(c => glCommitMatchesAssociate(c, github));
+      const glDates = new Set(myGlCommits.map(c => c.date?.slice(0,10)).filter(Boolean));
+      const glActiveDays = glDates.size;
+
+      const combinedActiveDays = new Set([...ghDates, ...glDates]).size;
+      const myGlMR = glMRMetrics[glName] || {};
 
       const myIssues   = jiraIssues.filter(i => issueMatchesAssignee(i, jira));
       const doneIssues = myIssues.filter(i => i.statusCategory?.toLowerCase().includes('done'));
@@ -713,12 +1003,20 @@ export default function App() {
 
       const totalSpillovers  = myIssues.reduce((s, i) => s + i.spillovers, 0);
       const totalSP          = doneIssues.reduce((s, i) => s + (i.storyPoints || 0), 0);
-      const lastCommit       = ghCommits[0]?.date ?? null;
+      const lastCommit       = ghCommits[0]?.date ?? myGlCommits[0]?.date ?? null;
 
       return {
         github, jira,
+        displayName: cleanDisplayName(jiraDisplay) || (!looksLikeId(jira) ? jira : null) || github,
         commits: ghCommits.length,
         activeDays: ghActiveDays,
+        glCommits: myGlCommits.length,
+        glActiveDays,
+        combinedActiveDays,
+        glMRsOpened: myGlMR.mrsOpened ?? 0,
+        glMRsMerged: myGlMR.mrsMerged ?? 0,
+        glMRsReviewed: myGlMR.mrsReviewed ?? 0,
+        glAvgCycleTime: myGlMR.avgCycleTimeDays ?? null,
         issuesTotal: myIssues.length,
         issuesDone: doneIssues.length,
         issuesOpen: openIssues.length,
@@ -726,11 +1024,11 @@ export default function App() {
         avgDaysInProgress,
         totalSpillovers,
         totalSP,
-        commitsPerIssue: doneIssues.length ? (ghCommits.length / doneIssues.length).toFixed(1) : '—',
+        commitsPerIssue: doneIssues.length ? ((ghCommits.length + myGlCommits.length) / doneIssues.length).toFixed(1) : '—',
         lastCommit,
       };
-    }).filter(p => p.commits > 0 || p.issuesTotal > 0);
-  }, [userMapping, associateList, commits, jiraIssues, issueMatchesAssignee]);
+    }).filter(p => p.commits > 0 || p.glCommits > 0 || p.issuesTotal > 0);
+  }, [userMapping, associateList, commits, glCommits, glMRMetrics, jiraIssues, issueMatchesAssignee, glCommitMatchesAssociate]);
 
   // ── Work summary (narrative) per associate ────────────────────────────────
   const workSummary = useMemo(() => {
@@ -770,7 +1068,7 @@ export default function App() {
           type:    'github',
         }));
 
-      const displayName = jiraDisplay || github;
+      const displayName = cleanDisplayName(jiraDisplay) || github;
       return { github, jira, displayName, jiraItems, commitItems };
     }).filter(p => p.jiraItems.length > 0 || p.commitItems.length > 0);
   }, [userMapping, associateList, commits, jiraIssues, issueMatchesAssignee]);
@@ -836,6 +1134,7 @@ export default function App() {
         <nav className="tab-nav">
           {[
             { id: 'github',      label: 'GitHub',      icon: <GitHubIcon size={15} /> },
+            { id: 'gitlab',      label: 'GitLab',      icon: <GitLabIcon size={15} /> },
             { id: 'jira',        label: 'Jira',         icon: <JiraIcon size={15} /> },
             { id: 'performance', label: 'Performance',  icon: <span style={{fontSize:14}}>📊</span> },
             { id: 'settings',    label: 'Settings',     icon: <span style={{fontSize:14}}>⚙️</span> },
@@ -879,7 +1178,7 @@ export default function App() {
               )}
               {activeAssociate && (
                 <span className="status-pill" style={{ background:'rgba(88,166,255,0.15)', borderColor:'var(--accent)', color:'var(--accent)' }}>
-                  👤 {activeAssociate}
+                  👤 {ghDisplayName(activeAssociate)}
                   <button
                     onClick={() => setActiveAssociate(null)}
                     style={{ background:'none', border:'none', color:'var(--accent)', cursor:'pointer', padding:'0 0 0 4px', fontSize:13, lineHeight:1 }}
@@ -905,6 +1204,18 @@ export default function App() {
                   ? <><span className="spinner" style={{ width:11, height:11, borderWidth:2 }}/></>
                   : <GitHubIcon size={13}/>}
                 {ghError ? '⚠ GitHub' : 'GitHub'}
+              </button>
+              <button
+                className={`btn btn-outline${glError ? ' btn-error-outline' : ''}`}
+                onClick={handleFetchGitLab}
+                disabled={fetchAllLoading}
+                style={{ padding:'4px 12px', fontSize:12, display:'flex', alignItems:'center', gap:4 }}
+                title={glError ? `GitLab error — click to retry` : 'Fetch GitLab only'}
+              >
+                {glLoading
+                  ? <><span className="spinner" style={{ width:11, height:11, borderWidth:2 }}/></>
+                  : <GitLabIcon size={13}/>}
+                {glError ? '⚠ GitLab' : 'GitLab'}
               </button>
               <button
                 className={`btn btn-outline${jiraError ? ' btn-error-outline' : ''}`}
@@ -934,6 +1245,58 @@ export default function App() {
         {/* ══ Settings tab ═══════════════════════════════════════════════════ */}
         {tab === 'settings' && (
           <div className="settings-page">
+            {/* ── Date range ── */}
+            <section className="settings-section">
+              <h2 className="settings-section-title"><CalendarIcon /> Date Range</h2>
+              <div className="settings-grid">
+                <div className="field">
+                  <label>From</label>
+                  <DatePicker
+                    selected={sinceDate}
+                    onChange={d => d && setSinceDate(d)}
+                    selectsStart startDate={sinceDate} endDate={untilDate} maxDate={untilDate}
+                    dateFormat="MMM d, yyyy"
+                    className="input dp-input" calendarClassName="dp-calendar"
+                  />
+                </div>
+                <div className="field">
+                  <label>To</label>
+                  <DatePicker
+                    selected={untilDate}
+                    onChange={d => d && setUntilDate(d)}
+                    selectsEnd startDate={sinceDate} endDate={untilDate}
+                    minDate={sinceDate} maxDate={new Date()}
+                    dateFormat="MMM d, yyyy"
+                    className="input dp-input" calendarClassName="dp-calendar"
+                  />
+                </div>
+                <div className="field" style={{ gridColumn: '1 / -1' }}>
+                  <label>Quick select</label>
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:6 }}>
+                    {QUARTER_RANGES.map(r => {
+                      const active = format(sinceDate,'yyyy-MM-dd') === format(r.start,'yyyy-MM-dd');
+                      return (
+                        <button
+                          key={r.label}
+                          className={`btn ${active ? 'btn-primary' : 'btn-outline'}`}
+                          style={{ padding:'5px 14px', fontWeight: r.current ? 600 : 400 }}
+                          onClick={() => { setSinceDate(r.start); setUntilDate(r.end); }}
+                          title={r.current ? 'Current quarter (today as end date)' : undefined}
+                        >
+                          {r.label}{r.current ? ' ★' : ''}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                    {QUICK_RANGES.map(r => (
+                      <button key={r.label} className="btn btn-outline" style={{ padding:'5px 14px' }} onClick={() => applyQuickRange(r.days)}>{r.label}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+
             {/* ── GitHub ── */}
             <section className="settings-section">
               <h2 className="settings-section-title"><GitHubIcon size={16}/> GitHub</h2>
@@ -988,6 +1351,11 @@ export default function App() {
                   )}
                 </div>
                 <div className="field">
+                  <label>Repository</label>
+                  <input className="input" type="text" placeholder="owner/repo  (e.g. octocat/hello-world)" value={ghRepo} onChange={e => setGhRepo(e.target.value)} />
+                  <span className="token-hint">Full repo path as <code>owner/name</code> — commits, PRs, and contributors are fetched from this repo</span>
+                </div>
+                <div className="field">
                   <label>Associate GitHub Usernames</label>
                   {userMapping.length > 0 ? (
                     <div style={{ display:'flex', flexWrap:'wrap', gap:6, padding:'8px 10px', background:'var(--surface2)', borderRadius:6, border:'1px solid var(--border)' }}>
@@ -1008,65 +1376,13 @@ export default function App() {
               </div>
             </section>
 
-            {/* ── Date range ── */}
-            <section className="settings-section">
-              <h2 className="settings-section-title"><CalendarIcon /> Date Range</h2>
-              <div className="settings-grid">
-                <div className="field">
-                  <label>From</label>
-                  <DatePicker
-                    selected={sinceDate}
-                    onChange={d => d && setSinceDate(d)}
-                    selectsStart startDate={sinceDate} endDate={untilDate} maxDate={untilDate}
-                    dateFormat="MMM d, yyyy"
-                    className="input dp-input" calendarClassName="dp-calendar"
-                  />
-                </div>
-                <div className="field">
-                  <label>To</label>
-                  <DatePicker
-                    selected={untilDate}
-                    onChange={d => d && setUntilDate(d)}
-                    selectsEnd startDate={sinceDate} endDate={untilDate}
-                    minDate={sinceDate} maxDate={new Date()}
-                    dateFormat="MMM d, yyyy"
-                    className="input dp-input" calendarClassName="dp-calendar"
-                  />
-                </div>
-                <div className="field" style={{ gridColumn: '1 / -1' }}>
-                  <label>Quick select</label>
-                  <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:6 }}>
-                    {QUARTER_RANGES.map(r => {
-                      const active = format(sinceDate,'yyyy-MM-dd') === format(r.start,'yyyy-MM-dd');
-                      return (
-                        <button
-                          key={r.label}
-                          className={`btn ${active ? 'btn-primary' : 'btn-outline'}`}
-                          style={{ padding:'5px 14px', fontWeight: r.current ? 600 : 400 }}
-                          onClick={() => { setSinceDate(r.start); setUntilDate(r.end); }}
-                          title={r.current ? 'Current quarter (today as end date)' : undefined}
-                        >
-                          {r.label}{r.current ? ' ★' : ''}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                    {QUICK_RANGES.map(r => (
-                      <button key={r.label} className="btn btn-outline" style={{ padding:'5px 14px' }} onClick={() => applyQuickRange(r.days)}>{r.label}</button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
-
             {/* ── Jira ── */}
             <section className="settings-section">
               <h2 className="settings-section-title"><JiraIcon size={16}/> Atlassian / Jira</h2>
               <div className="settings-grid">
                 <div className="field">
                   <label>Jira Base URL</label>
-                  <input className="input" type="text" placeholder="https://redhat.atlassian.net" value={jiraBase} onChange={e => setJiraBase(e.target.value)} />
+                  <input className="input" type="text" placeholder="https://your-org.atlassian.net" value={jiraBase} onChange={e => setJiraBase(e.target.value)} />
                   <span className="token-hint">Sent to the Python backend — not called from the browser</span>
                 </div>
                 <div className="field">
@@ -1096,11 +1412,50 @@ export default function App() {
               </div>
             </section>
 
+            {/* ── GitLab ── */}
+            <section className="settings-section">
+              <h2 className="settings-section-title"><GitLabIcon size={16}/> GitLab</h2>
+              <div className="settings-grid">
+                <div className="field">
+                  <label>GitLab Base URL</label>
+                  <input className="input" type="text" placeholder="https://gitlab.example.com" value={glUrl} onChange={e => setGlUrl(e.target.value)} />
+                  <span className="token-hint">Self-managed instances behind VPN are supported — ensure you are connected before fetching</span>
+                </div>
+                <div className="field">
+                  <label>Personal Access Token</label>
+                  <input className="input" type="password" placeholder="glpat-…" value={glToken} onChange={e => setGlToken(e.target.value)} />
+                  <span className="token-hint">
+                    Create at <strong>GitLab → Preferences → Access Tokens</strong> with <code>read_api</code> scope
+                  </span>
+                </div>
+                <div className="field">
+                  <label>Project Path</label>
+                  <input className="input" type="text" placeholder="group/project" value={glProject} onChange={e => setGlProject(e.target.value)} />
+                  <span className="token-hint">The full path as shown in the URL, e.g. <code>my-group/my-project</code></span>
+                </div>
+                <div className="field" style={{ alignSelf:'end' }}>
+                  <button className="btn btn-outline" onClick={handleTestGitLab} style={{ marginBottom:8, width:'100%' }}>
+                    Test Connection
+                  </button>
+                  {glTestStatus && (
+                    <div className={`alert ${glTestStatus === 'ok' ? 'alert-info' : 'alert-error'}`} style={{ marginTop:8 }}>
+                      {glTestStatus === 'ok' ? '✓ ' : '✗ '}{glTestMsg}
+                      {glTestStatus !== 'ok' && /vpn|unable to reach|name.?resolution|max retries/i.test(glTestMsg) && (
+                        <div style={{ marginTop:6, fontSize:13, opacity:0.9 }}>
+                          Tip: If your GitLab instance is behind a corporate VPN, make sure you are connected and try again.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
             {/* ── Username mapping ── */}
             <section id="mapping-section" className="settings-section">
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
                 <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                  <h2 className="settings-section-title" style={{ margin:0 }}>GitHub ↔ Jira Username Mapping</h2>
+                  <h2 className="settings-section-title" style={{ margin:0 }}>GitHub ↔ GitLab ↔ Jira Username Mapping</h2>
                   {mappingSaved && (
                     <span style={{ fontSize:12, color:'var(--accent2)', fontWeight:500, transition:'opacity .3s' }}>✓ Saved</span>
                   )}
@@ -1119,8 +1474,9 @@ export default function App() {
                 The display name is shown in the UI — the underlying Cloud accountId is stored automatically.
               </p>
               <div className="mapping-table">
-                <div className="mapping-header" style={{ gridTemplateColumns:'1fr 1fr auto auto' }}>
+                <div className="mapping-header" style={{ gridTemplateColumns:'1fr 1fr 1fr auto auto' }}>
                   <span>GitHub Username</span>
+                  <span>GitLab Username</span>
                   <span>Jira Username</span>
                   <span/>
                   <span/>
@@ -1130,9 +1486,12 @@ export default function App() {
                   const resolved = !!row.jiraDisplay;
                   return (
                     <div key={i} style={{ display:'contents' }}>
-                      <div className="mapping-row" style={{ gridColumn:'1 / -1', display:'grid', gridTemplateColumns:'1fr 1fr auto auto', gap:8, alignItems:'start', padding:'6px 16px' }}>
+                      <div className="mapping-row" style={{ gridColumn:'1 / -1', display:'grid', gridTemplateColumns:'1fr 1fr 1fr auto auto', gap:8, alignItems:'start', padding:'6px 16px' }}>
                         <input className="input" placeholder="github-login" value={row.github}
                           onChange={e => updateMapping(i,'github',e.target.value)} />
+
+                        <input className="input" placeholder="gitlab-login (optional)" value={row.gitlab || ''}
+                          onChange={e => updateMapping(i,'gitlab',e.target.value)} />
 
                         {/* Jira column — show resolved pill when accountId has a display label */}
                         {resolved ? (
@@ -1187,7 +1546,7 @@ export default function App() {
                                   style={{ fontSize:12, padding:'4px 12px', display:'flex', flexDirection:'column', alignItems:'flex-start', gap:1 }}
                                   onClick={() => {
                                     setMappings(m => m.map((r, idx) => idx === i
-                                      ? { ...r, jira: u.username, jiraDisplay: label || u.username }
+                                      ? { ...r, jira: u.username, jiraDisplay: u.displayName || u.username }
                                       : r
                                     ));
                                     setLookupState(s => ({ ...s, [i]: undefined }));
@@ -1221,15 +1580,15 @@ export default function App() {
                   style={{ flex:'1 1 200px', justifyContent:'center', padding:'10px', fontSize:14 }}
                 >
                   {fetchAllLoading
-                    ? <><span className="spinner" style={{ width:15, height:15, borderWidth:2 }}/> Fetching GitHub &amp; Jira…</>
-                    : <>↻ Fetch All  <span style={{ opacity:.6, fontSize:12, fontWeight:400 }}>(GitHub + Jira)</span></>}
+                    ? <><span className="spinner" style={{ width:15, height:15, borderWidth:2 }}/> Fetching all…</>
+                    : <>↻ Fetch All  <span style={{ opacity:.6, fontSize:12, fontWeight:400 }}>(GitHub + GitLab + Jira)</span></>}
                 </button>
 
                 {/* GitHub only */}
                 <button
                   className="btn btn-outline"
                   onClick={handleFetchGitHub}
-                  disabled={ghLoading || jiraLoading}
+                  disabled={fetchAllLoading}
                   style={{ flex:'1 1 140px', justifyContent:'center', padding:'10px', fontSize:13, display:'flex', alignItems:'center', gap:6 }}
                   title="Fetch only GitHub data"
                 >
@@ -1238,11 +1597,24 @@ export default function App() {
                     : <><GitHubIcon size={14}/> {ghFetched && !ghError ? '↻ Re-fetch GitHub' : 'Fetch GitHub'}</>}
                 </button>
 
+                {/* GitLab only */}
+                <button
+                  className="btn btn-outline"
+                  onClick={handleFetchGitLab}
+                  disabled={fetchAllLoading}
+                  style={{ flex:'1 1 140px', justifyContent:'center', padding:'10px', fontSize:13, display:'flex', alignItems:'center', gap:6 }}
+                  title="Fetch only GitLab data"
+                >
+                  {glLoading
+                    ? <><span className="spinner" style={{ width:13, height:13, borderWidth:2 }}/> GitLab…</>
+                    : <><GitLabIcon size={14}/> {glFetched && !glError ? '↻ Re-fetch GitLab' : 'Fetch GitLab'}</>}
+                </button>
+
                 {/* Jira only */}
                 <button
                   className="btn btn-outline"
                   onClick={handleFetchJira}
-                  disabled={ghLoading || jiraLoading}
+                  disabled={fetchAllLoading}
                   style={{ flex:'1 1 140px', justifyContent:'center', padding:'10px', fontSize:13, display:'flex', alignItems:'center', gap:6 }}
                   title="Fetch only Jira data"
                 >
@@ -1255,9 +1627,11 @@ export default function App() {
               {/* Status row */}
               <div style={{ marginTop:10, display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
                 {ghFetched && !ghError   && <span className="status-pill" style={{ color:'var(--accent2)' }}>✓ GitHub fetched</span>}
+                {glFetched && !glError   && <span className="status-pill" style={{ color:'#FC6D26' }}>✓ GitLab fetched</span>}
                 {jiraFetched && !jiraError && <span className="status-pill" style={{ color:'#2684FF' }}>✓ Jira fetched</span>}
                 {demoMode && <span className="status-pill" style={{ color:'#d2a8ff' }}>🎭 Demo mode active</span>}
                 {ghError   && <span className="status-pill" style={{ color:'var(--danger)' }}>✗ GitHub error — use Fetch GitHub to retry</span>}
+                {glError   && <span className="status-pill" style={{ color:'var(--danger)' }}>✗ GitLab error — use Fetch GitLab to retry</span>}
                 {jiraError && <span className="status-pill" style={{ color:'var(--danger)' }}>✗ Jira error — use Fetch Jira to retry</span>}
               </div>
 
@@ -1300,7 +1674,7 @@ export default function App() {
                 <p>Enter your GitHub token and click "Fetch GitHub"</p>
               </div>
             )}
-            {ghLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from Azure/ARO-HCP…</div>}
+            {ghLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from {ghRepo || 'GitHub'}…</div>}
 
             {ghFetched && !ghLoading && (
               <>
@@ -1319,14 +1693,13 @@ export default function App() {
                             key={c.login}
                             className={`chip ${activeAssociate === c.login || (!activeAssociate && selectedAuthors.includes(c.login)) ? 'active' : ''}`}
                             onClick={() => {
-                              // Clicking a chip sets the global associate filter
                               setActiveAssociate(prev => prev === c.login ? null : c.login);
                               setSelectedAuthors([]);
                               setGhPage(1);
                             }}
                           >
                             {c.avatarUrl && <img src={c.avatarUrl} alt="" />}
-                            {c.login}
+                            {ghDisplayName(c.login)}
                           </button>
                         ))}
                       </div>
@@ -1363,7 +1736,7 @@ export default function App() {
                             <span className="day-hover-count">{hoveredDay.commits} commit{hoveredDay.commits !== 1 ? 's' : ''}</span>
                             {hoveredDay.commits > 0 && (
                               <a className="day-hover-link"
-                                href={`https://github.com/Azure/ARO-HCP/commits/main/?since=${hoveredDay.isoDate}T00:00:00Z&until=${hoveredDay.isoDate}T23:59:59Z${selectedAuthors.length===1?`&author=${selectedAuthors[0]}`:''}`}
+                                href={`https://github.com/${ghRepo}/commits/main/?since=${hoveredDay.isoDate}T00:00:00Z&until=${hoveredDay.isoDate}T23:59:59Z${selectedAuthors.length===1?`&author=${selectedAuthors[0]}`:''}`}
                                 target="_blank" rel="noreferrer">
                                 View on GitHub ↗
                               </a>
@@ -1459,7 +1832,7 @@ export default function App() {
                   const prRows = (activeAssociate
                     ? [activeAssociate]
                     : associateList
-                  ).map((login, i) => ({ login, ...prMetrics[login] ?? {}, colorIdx: i }))
+                  ).map((login, i) => ({ login, displayName: ghDisplayName(login), ...prMetrics[login] ?? {}, colorIdx: i }))
                    .filter(r => r.prsOpened != null);
                   if (!prRows.length) return null;
                   const totalPRs = prRows.reduce((s,r) => s + (r.prsOpened ?? 0), 0);
@@ -1471,7 +1844,7 @@ export default function App() {
                       )}
                       {!prFetchNote && totalPRs === 0 && (
                         <div className="alert" style={{ marginTop:8, background:'var(--surface)', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:13 }}>
-                          No PRs found for <strong style={{ color:'var(--text)' }}>{prRows.map(r=>r.login).join(', ')}</strong> in {since}–{until} in <code>Azure/ARO-HCP</code>.
+                          No PRs found for <strong style={{ color:'var(--text)' }}>{prRows.map(r=>r.displayName).join(', ')}</strong> in {since}–{until} in <code>{ghRepo}</code>.
                           Verify the GitHub usernames in the mapping table match their GitHub accounts, and that the date range covers their activity.
                         </div>
                       )}
@@ -1506,7 +1879,7 @@ export default function App() {
                           <ResponsiveContainer width="100%" height={240}>
                             <BarChart data={prRows} margin={{ top:0, right:8, left:-20, bottom:0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                              <XAxis dataKey="login" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                              <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                               <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                               <Tooltip content={<ChartTooltip />} />
                               <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
@@ -1522,7 +1895,7 @@ export default function App() {
                           <ResponsiveContainer width="100%" height={240}>
                             <BarChart data={prRows} margin={{ top:0, right:8, left:-20, bottom:0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                              <XAxis dataKey="login" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                              <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                               <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                               <Tooltip content={<ChartTooltip />} />
                               <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
@@ -1542,7 +1915,7 @@ export default function App() {
                           <ResponsiveContainer width="100%" height={240}>
                             <BarChart data={prRows} margin={{ top:0, right:40, left:-20, bottom:0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                              <XAxis dataKey="login" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                              <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                               <YAxis yAxisId="count" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                               <YAxis yAxisId="days"  orientation="right" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} unit="d" />
                               <Tooltip content={<ChartTooltip />} />
@@ -1586,6 +1959,249 @@ export default function App() {
                       <button className="btn btn-outline" onClick={() => setGhPage(p => Math.max(1,p-1))} disabled={ghPage===1} style={{ padding:'4px 12px' }}>←</button>
                       <span>Page {ghPage} of {Math.ceil(filteredCommits.length / PAGE_SIZE)}</span>
                       <button className="btn btn-outline" onClick={() => setGhPage(p => Math.min(Math.ceil(filteredCommits.length/PAGE_SIZE),p+1))} disabled={ghPage===Math.ceil(filteredCommits.length/PAGE_SIZE)} style={{ padding:'4px 12px' }}>→</button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {/* ══ GitLab tab ════════════════════════════════════════════════════ */}
+        {tab === 'gitlab' && (
+          <>
+            {glError && (
+              <div className="alert alert-error">
+                {glError}
+                {/vpn|unable to reach|name.?resolution|max retries/i.test(glError) && (
+                  <div style={{ marginTop:8, fontSize:13, opacity:0.9 }}>
+                    Tip: If your GitLab instance is behind a corporate VPN, make sure you are connected to the VPN and try again.
+                  </div>
+                )}
+              </div>
+            )}
+            {!glFetched && !glLoading && (
+              <div className="empty-state">
+                <GitLabIcon size={40} />
+                <p>Configure your GitLab token and project in Settings, then click &quot;Fetch GitLab&quot;</p>
+              </div>
+            )}
+            {glLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from GitLab…</div>}
+
+            {glFetched && !glLoading && (
+              <>
+                {/* Contributor chips */}
+                {glContributors.length > 0 && (
+                  <div className="filters-row">
+                    <div className="filter-group">
+                      <label>Filter by contributor</label>
+                      <div className="chip-list">
+                        <button
+                          className={`chip chip-all ${!activeAssociate ? 'active' : ''}`}
+                          onClick={() => { setActiveAssociate(null); setGlPage(1); }}
+                        >All</button>
+                        {glContributors.map(c => {
+                          const people = userMapping.length > 0 ? userMapping : associateList.map(g => ({ github: g, gitlab: '' }));
+                          const match = people.find(p => {
+                            const tokens = glAuthorIndex[p.github?.toLowerCase()];
+                            return tokens?.has(c.login.toLowerCase());
+                          });
+                          const ghLogin = match?.github || c.login;
+                          return (
+                            <button
+                              key={c.login}
+                              className={`chip ${activeAssociate && glCommitMatchesAssociate({ author: c.login, authorEmail: '' }, activeAssociate) ? 'active' : ''}`}
+                              onClick={() => {
+                                setActiveAssociate(prev => prev === ghLogin ? null : ghLogin);
+                                setGlPage(1);
+                              }}
+                            >
+                              {ghDisplayName(ghLogin)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Stats */}
+                <div className="stats-grid">
+                  {[
+                    { label:'Total Commits', value: glStats.total.toLocaleString(), sub:'in selected range', color:'#FC6D26' },
+                    { label:'Contributors',  value: glStats.uniqueAuthors, sub:'active authors', color:'var(--accent2)' },
+                    { label:'Active Days',   value: glStats.activeDays,    sub:'days with commits', color:'var(--accent4)' },
+                    { label:'Avg / Day',     value: glStats.avgPerDay,     sub:'commits per active day', color:'var(--accent5)' },
+                  ].map(s => (
+                    <div key={s.label} className="stat-card">
+                      <div className="label">{s.label}</div>
+                      <div className="value" style={{ color: s.color }}>{s.value}</div>
+                      <div className="sub">{s.sub}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Charts */}
+                <div className="charts-grid">
+                  {/* Commits over time */}
+                  <div className="chart-card full-width">
+                    <h3>Commits Over Time</h3>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <LineChart data={glCommitsPerDayData} margin={{ top:4, right:8, left:-20, bottom:0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+                        <XAxis dataKey="date" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false}
+                          interval={Math.max(0, Math.floor(glCommitsPerDayData.length/10)-1)} />
+                        <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Line type="monotone" dataKey="commits" stroke="#FC6D26" strokeWidth={2} dot={false} activeDot={{ r:5, strokeWidth:0 }} name="Commits" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* By author */}
+                  <div className="chart-card">
+                    <h3>Commits by Author</h3>
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={glCommitsPerAuthorData} layout="vertical" margin={{ top:0, right:16, left:20, bottom:0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#21262d" horizontal={false} />
+                        <XAxis type="number" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} />
+                        <YAxis type="category" dataKey="author" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} width={90} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Bar dataKey="commits" name="Commits" radius={[0,4,4,0]}>
+                          {glCommitsPerAuthorData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Day of week */}
+                  <div className="chart-card">
+                    <h3>Activity by Day of Week</h3>
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={glDowData} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+                        <XAxis dataKey="day" tick={{ fill:'#8b949e', fontSize:12 }} tickLine={false} />
+                        <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Bar dataKey="commits" name="Commits" radius={[4,4,0,0]}>
+                          {glDowData.map((_, i) => <Cell key={i} fill={i===0||i===6?'#f78166':'#3fb950'} />)}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Weekly stacked */}
+                  {glWeeklyStackedData.authors.length > 0 && (
+                    <div className="chart-card full-width">
+                      <h3>Weekly Commits by Author (Stacked)</h3>
+                      <ResponsiveContainer width="100%" height={220}>
+                        <BarChart data={glWeeklyStackedData.data} margin={{ top:4, right:8, left:-20, bottom:0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+                          <XAxis dataKey="week" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                          <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
+                          {glWeeklyStackedData.authors.map((a, i) => (
+                            <Bar key={a} dataKey={a} stackId="a" fill={COLORS[i % COLORS.length]} />
+                          ))}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                {/* MR metrics */}
+                {Object.keys(glMRMetrics).length > 0 && (() => {
+                  const mrAuthors = (activeAssociate ? [activeAssociate] : associateList)
+                    .map((gh, i) => {
+                      const gl = ghToGl(gh);
+                      return { login: gl, displayName: ghDisplayName(gh), ...glMRMetrics[gl], colorIdx: i };
+                    })
+                    .filter(a => a.mrsOpened != null);
+                  if (!mrAuthors.length) return null;
+                  return (
+                    <>
+                      <div className="stats-grid" style={{ marginTop:8 }}>
+                        {[
+                          { label:'MRs Opened', value: mrAuthors.reduce((s,a) => s + (a.mrsOpened ?? 0), 0), color:'#FC6D26' },
+                          { label:'MRs Merged', value: mrAuthors.reduce((s,a) => s + (a.mrsMerged ?? 0), 0), color:'var(--accent2)' },
+                          { label:'Reviews Given', value: mrAuthors.reduce((s,a) => s + (a.mrsReviewed ?? 0), 0), color:'var(--accent4)' },
+                          { label:'Avg Cycle Time', value: (() => {
+                            const vals = mrAuthors.map(a => a.avgCycleTimeDays).filter(v => v != null);
+                            return vals.length ? `${(vals.reduce((a,b) => a+b, 0) / vals.length).toFixed(1)}d` : '—';
+                          })(), color:'var(--accent5)' },
+                        ].map(s => (
+                          <div key={s.label} className="stat-card">
+                            <div className="label">{s.label}</div>
+                            <div className="value" style={{ color: s.color }}>{s.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="charts-grid" style={{ marginTop:8 }}>
+                        <div className="chart-card">
+                          <h3>MRs Opened vs Merged</h3>
+                          <ResponsiveContainer width="100%" height={240}>
+                            <BarChart data={mrAuthors} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+                              <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                              <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                              <Tooltip content={<ChartTooltip />} />
+                              <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
+                              <Bar dataKey="mrsOpened" name="Opened" fill="#FC6D26" radius={[4,4,0,0]} />
+                              <Bar dataKey="mrsMerged" name="Merged" fill="var(--accent2)" radius={[4,4,0,0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="chart-card">
+                          <h3>Reviews Given</h3>
+                          <ResponsiveContainer width="100%" height={240}>
+                            <BarChart data={mrAuthors} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+                              <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                              <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                              <Tooltip content={<ChartTooltip />} />
+                              <Bar dataKey="mrsReviewed" name="MRs Reviewed" fill="var(--accent4)" radius={[4,4,0,0]} />
+                              <Bar dataKey="reviewNotes" name="Review Notes" fill="#d2a8ff" radius={[4,4,0,0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                {/* Commit log */}
+                <div className="table-card">
+                  <div className="table-header">
+                    <h3>Commit Log <span className="badge">{glFilteredCommits.length.toLocaleString()}</span></h3>
+                    <input className="input" type="text" placeholder="Search message or author…"
+                      value={glSearchMsg} onChange={e => { setGlSearchMsg(e.target.value); setGlPage(1); }}
+                      style={{ width:260 }} />
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr><th>SHA</th><th>Author</th><th>Message</th><th>Date</th></tr>
+                      </thead>
+                      <tbody>
+                        {glPagedCommits.length === 0 ? (
+                          <tr><td colSpan={4} style={{ textAlign:'center', padding:32, color:'var(--text-muted)' }}>No commits match current filters</td></tr>
+                        ) : glPagedCommits.map(c => (
+                          <tr key={c.sha}>
+                            <td><a className="commit-sha" href={c.url} target="_blank" rel="noreferrer">{c.sha.slice(0,7)}</a></td>
+                            <td><div className="commit-author">{c.author}</div></td>
+                            <td><span className="commit-msg" title={c.message}>{c.message}</span></td>
+                            <td className="commit-date">{fmtDate(c.date)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {Math.ceil(glFilteredCommits.length / PAGE_SIZE) > 1 && (
+                    <div className="pagination">
+                      <button className="btn btn-outline" onClick={() => setGlPage(p => Math.max(1, p - 1))} disabled={glPage === 1} style={{ padding:'4px 12px' }}>←</button>
+                      <span>Page {glPage} of {Math.ceil(glFilteredCommits.length / PAGE_SIZE)}</span>
+                      <button className="btn btn-outline" onClick={() => setGlPage(p => Math.min(Math.ceil(glFilteredCommits.length / PAGE_SIZE), p + 1))} disabled={glPage === Math.ceil(glFilteredCommits.length / PAGE_SIZE)} style={{ padding:'4px 12px' }}>→</button>
                     </div>
                   )}
                 </div>
@@ -1675,7 +2291,7 @@ export default function App() {
                               style={{ borderColor: activeAssociate === opt.github ? COLORS[i % COLORS.length] : undefined }}
                               onClick={() => { setActiveAssociate(prev => prev === opt.github ? null : opt.github); setJiraPage(1); }}
                             >
-                              {opt.github}
+                              {ghDisplayName(opt.github)}
                             </button>
                           ))}
                         </div>
@@ -1940,14 +2556,14 @@ export default function App() {
               </div>
             </div>
 
-            {!ghFetched && !jiraFetched && (
+            {!ghFetched && !glFetched && !jiraFetched && (
               <div className="empty-state">
                 <span style={{ fontSize:40 }}>📊</span>
-                <p>Fetch GitHub and/or Jira data first</p>
+                <p>Fetch GitHub, GitLab, and/or Jira data first</p>
               </div>
             )}
 
-            {(ghFetched || jiraFetched) && perfData.length === 0 && (
+            {(ghFetched || glFetched || jiraFetched) && perfData.length === 0 && (
               <div className="alert alert-info">
                 No associates matched. Make sure GitHub usernames match the data or set up the username mapping.
               </div>
@@ -1973,14 +2589,14 @@ export default function App() {
                           style={{ borderColor: activeAssociate === p.github ? COLORS[i % COLORS.length] : undefined }}
                           onClick={() => setActiveAssociate(prev => prev === p.github ? null : p.github)}
                         >
-                          {p.github}
+                          {p.displayName}
                         </button>
                       ))}
                     </div>
                   </div>
                   {activeAssociate && (
                     <div className="badge" style={{ alignSelf:'center', background:'rgba(88,166,255,0.1)', color:'var(--accent)', padding:'4px 12px', fontSize:12 }}>
-                      1:1 view — {activeAssociate}
+                      1:1 view — {ghDisplayName(activeAssociate)}
                     </div>
                   )}
                 </div>
@@ -1989,11 +2605,15 @@ export default function App() {
                 <div style={{ display:'flex', flexWrap:'wrap', gap:12, marginBottom:24 }}>
                   {perfData.filter(p => !activeAssociate || p.github === activeAssociate).map((p, i) => (
                     <div key={p.github} className={`perf-card ${activeAssociate === p.github ? 'perf-card-focused' : ''}`} style={{ borderColor: COLORS[perfData.indexOf(p) % COLORS.length] }}>
-                      <div className="perf-name" style={{ color: COLORS[i % COLORS.length] }}>{p.github}</div>
-                      {p.jira !== p.github && <div className="perf-sub">{p.jira} (Jira)</div>}
+                      <div className="perf-name" style={{ color: COLORS[i % COLORS.length] }}>{p.displayName}</div>
+                      {p.displayName !== p.github && <div className="perf-sub">{p.github} (GitHub)</div>}
                       <div className="perf-metrics">
-                        <div className="perf-metric"><span>Commits</span><strong>{p.commits}</strong></div>
-                        <div className="perf-metric"><span>Active Days</span><strong>{p.activeDays}</strong></div>
+                        <div className="perf-metric"><span>GH Commits</span><strong>{p.commits}</strong></div>
+                        <div className="perf-metric"><span>GH Active Days</span><strong>{p.activeDays}</strong></div>
+                        {p.glCommits > 0 && <>
+                          <div className="perf-metric"><span>GL Commits</span><strong style={{ color:'#FC6D26' }}>{p.glCommits}</strong></div>
+                          <div className="perf-metric"><span>GL Active Days</span><strong style={{ color:'#FC6D26' }}>{p.glActiveDays}</strong></div>
+                        </>}
                         <div className="perf-metric"><span>Issues Done</span><strong style={{ color:'var(--accent2)' }}>{p.issuesDone}</strong></div>
                         <div className="perf-metric"><span>Issues Open</span><strong style={{ color:'var(--accent5)' }}>{p.issuesOpen}</strong></div>
                         <div className="perf-metric"><span>Avg Cycle</span><strong>{p.avgCycleTime !== null ? `${p.avgCycleTime}d` : '—'}</strong></div>
@@ -2002,11 +2622,18 @@ export default function App() {
                         {/* PR metrics */}
                         {prMetrics[p.github] && <>
                           <div className="perf-metric" style={{ borderTop:'1px solid var(--border)', gridColumn:'1/-1', paddingTop:4, marginTop:2 }}/>
-                          <div className="perf-metric"><span>PRs Merged</span><strong style={{ color:'var(--accent)' }}>{prMetrics[p.github].prsMerged ?? '—'}</strong></div>
-                          <div className="perf-metric"><span>Reviews Given</span><strong style={{ color:'var(--accent4)' }}>{prMetrics[p.github].prsReviewed ?? '—'}</strong></div>
-                          <div className="perf-metric"><span>Review Comments</span><strong style={{ color:'#d2a8ff' }}>{prMetrics[p.github].reviewComments ?? '—'}</strong></div>
-                          <div className="perf-metric"><span>PR Cycle Time</span><strong>{prMetrics[p.github].avgCycleTimeDays != null ? `${prMetrics[p.github].avgCycleTimeDays}d` : '—'}</strong></div>
+                          <div className="perf-metric"><span>GH PRs Merged</span><strong style={{ color:'var(--accent)' }}>{prMetrics[p.github].prsMerged ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH Reviews Given</span><strong style={{ color:'var(--accent4)' }}>{prMetrics[p.github].prsReviewed ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH Review Comments</span><strong style={{ color:'#d2a8ff' }}>{prMetrics[p.github].reviewComments ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH PR Cycle Time</span><strong>{prMetrics[p.github].avgCycleTimeDays != null ? `${prMetrics[p.github].avgCycleTimeDays}d` : '—'}</strong></div>
                           <div className="perf-metric"><span>PR Churn <InfoTip text={PR_CHURN_TIP} /></span><strong style={{ color: (prMetrics[p.github].churnPct??0)>60?'var(--danger)':'inherit' }}>{prMetrics[p.github].churnPct != null ? `${prMetrics[p.github].churnPct}%` : '—'}</strong></div>
+                        </>}
+                        {/* GL MR metrics */}
+                        {p.glMRsOpened > 0 && <>
+                          <div className="perf-metric" style={{ borderTop:'1px solid var(--border)', gridColumn:'1/-1', paddingTop:4, marginTop:2 }}/>
+                          <div className="perf-metric"><span>GL MRs Merged</span><strong style={{ color:'#FC6D26' }}>{p.glMRsMerged}</strong></div>
+                          <div className="perf-metric"><span>GL Reviews Given</span><strong style={{ color:'#FC6D26' }}>{p.glMRsReviewed}</strong></div>
+                          <div className="perf-metric"><span>GL MR Cycle Time</span><strong>{p.glAvgCycleTime != null ? `${p.glAvgCycleTime}d` : '—'}</strong></div>
                         </>}
                         <div className="perf-metric"><span>Last Commit</span><strong style={{ fontSize:11 }}>{p.lastCommit ? fmtDate(p.lastCommit) : '—'}</strong></div>
                       </div>
@@ -2059,7 +2686,7 @@ export default function App() {
                       <h3>Relative Performance Radar
                         <span style={{ fontSize:12, fontWeight:400, color:'var(--text-muted)', marginLeft:8 }}>
                           each axis normalised to team max = 100
-                          {activeAssociate && <> · {activeAssociate}</>}
+                          {activeAssociate && <> · {ghDisplayName(activeAssociate)}</>}
                         </span>
                       </h3>
                       <p style={{ fontSize:12, color:'var(--text-muted)', margin:'0 0 8px' }}>
@@ -2110,24 +2737,24 @@ export default function App() {
                 {/* Summary table */}
                 <div className="table-card">
                   <div className="table-header">
-                    <h3>Performance Summary {activeAssociate && <span className="badge">{activeAssociate}</span>}</h3>
+                    <h3>Performance Summary {activeAssociate && <span className="badge">{ghDisplayName(activeAssociate)}</span>}</h3>
                   </div>
                   <div className="table-wrap">
                     <table>
                       <thead>
                         <tr>
                           <th>Associate</th>
-                          <th>Commits</th>
+                          <th>GH Commits</th>
+                          <th>GL Commits</th>
                           <th>Active Days</th>
                           <th>Issues Done</th>
                           <th>Issues Open</th>
                           <th>Avg Cycle (d)</th>
                           <th>Spillovers</th>
                           <th>Story Points</th>
-                          <th>PRs Merged</th>
-                          <th>Reviews Given</th>
-                          <th>Review Comments</th>
-                          <th>PR Cycle (d)</th>
+                          <th>GH PRs Merged</th>
+                          <th>GL MRs Merged</th>
+                          <th>Reviews</th>
                           <th>PR Churn <InfoTip text={PR_CHURN_TIP} /></th>
                           <th>Last Commit</th>
                         </tr>
@@ -2137,12 +2764,13 @@ export default function App() {
                           <tr key={p.github}>
                             <td>
                               <div style={{ display:'flex', flexDirection:'column' }}>
-                                <strong style={{ color: COLORS[i%COLORS.length] }}>{p.github}</strong>
-                                {p.jira !== p.github && <span style={{ fontSize:11, color:'var(--text-muted)' }}>{p.jira}</span>}
+                                <strong style={{ color: COLORS[i%COLORS.length] }}>{p.displayName}</strong>
+                                {p.displayName !== p.github && <span style={{ fontSize:11, color:'var(--text-muted)' }}>{p.github}</span>}
                               </div>
                             </td>
                             <td><strong style={{ color:'var(--accent)' }}>{p.commits}</strong></td>
-                            <td>{p.activeDays}</td>
+                            <td><strong style={{ color:'#FC6D26' }}>{p.glCommits ?? '—'}</strong></td>
+                            <td>{p.combinedActiveDays}</td>
                             <td><strong style={{ color:'var(--accent2)' }}>{p.issuesDone}</strong></td>
                             <td>{p.issuesOpen}</td>
                             <td>{p.avgCycleTime !== null ? `${p.avgCycleTime}d` : '—'}</td>
@@ -2151,12 +2779,10 @@ export default function App() {
                                 {p.totalSpillovers}
                               </span>
                             </td>
-                            <td style={{ color:'var(--accent4)', fontWeight:600 }}>{p.totalSP || '—'}</td>
-                            {/* PR columns */}
+                            <td style={{ color:'var(--accent4)', fontWeight:600 }}>{p.totalSP ?? '—'}</td>
                             <td style={{ color:'var(--accent)', fontWeight:600 }}>{prMetrics[p.github]?.prsMerged ?? '—'}</td>
-                            <td style={{ color:'var(--accent4)', fontWeight:600 }}>{prMetrics[p.github]?.prsReviewed ?? '—'}</td>
-                            <td style={{ color:'#d2a8ff', fontWeight:600 }}>{prMetrics[p.github]?.reviewComments ?? '—'}</td>
-                            <td>{prMetrics[p.github]?.avgCycleTimeDays != null ? `${prMetrics[p.github].avgCycleTimeDays}d` : '—'}</td>
+                            <td style={{ color:'#FC6D26', fontWeight:600 }}>{p.glMRsMerged ?? '—'}</td>
+                            <td style={{ color:'var(--accent4)', fontWeight:600 }}>{(prMetrics[p.github]?.prsReviewed ?? 0) + (p.glMRsReviewed ?? 0)}</td>
                             <td>
                               {prMetrics[p.github]?.churnPct != null
                                 ? <span style={{ color:(prMetrics[p.github].churnPct>60)?'var(--danger)':'inherit', fontWeight:600 }}>{prMetrics[p.github].churnPct}%</span>
