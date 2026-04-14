@@ -1,0 +1,670 @@
+/* ── Layout ── */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+
+.header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 60px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-logo svg { color: var(--accent); }
+.header-title { font-size: 16px; font-weight: 600; }
+.header-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+
+.main { flex: 1; padding: 24px; max-width: 1400px; margin: 0 auto; width: 100%; }
+
+/* ── Config panel ── */
+.config-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+
+.config-card h2 {
+  font-size: 14px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 16px;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+@media (max-width: 900px) {
+  .config-grid { grid-template-columns: 1fr 1fr; }
+}
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+
+.input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 13px;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+
+.input:focus { border-color: var(--accent); }
+.input::placeholder { color: var(--text-muted); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  transition: opacity 0.15s, transform 0.1s;
+  white-space: nowrap;
+}
+
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary { background: var(--accent); color: #0d1117; }
+.btn-primary:hover:not(:disabled) { opacity: 0.85; }
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.btn-outline:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-error-outline { border-color: var(--danger) !important; color: var(--danger) !important; }
+.btn-error-outline:hover:not(:disabled) { background: rgba(248,81,73,0.1); }
+
+/* ── Error / Info ── */
+.alert {
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.alert-error { background: rgba(248,81,73,0.12); border: 1px solid rgba(248,81,73,0.3); color: #f85149; }
+.alert-info  { background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.25); color: var(--accent); }
+
+/* ── Filters row ── */
+.filters-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.filter-group { display: flex; flex-direction: column; gap: 5px; }
+.filter-group label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+
+/* ── Contributors chip list ── */
+.chip-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  color: var(--text-muted);
+}
+.chip img { width: 18px; height: 18px; border-radius: 50%; }
+.chip.active { border-color: var(--accent); background: rgba(88,166,255,0.1); color: var(--text); }
+.chip-all { font-weight: 600; }
+
+/* ── Stats cards ── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+
+.stat-card .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px; }
+.stat-card .value { font-size: 28px; font-weight: 700; line-height: 1; }
+.stat-card .sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+/* ── Charts ── */
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 1000px) {
+  .charts-grid { grid-template-columns: 1fr; }
+}
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.chart-card.full-width { grid-column: 1 / -1; }
+
+.chart-card h3 { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.4px; }
+
+/* ── Commits table ── */
+.table-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.table-header h3 { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+
+.table-wrap { overflow-x: auto; }
+
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+  white-space: nowrap;
+}
+tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: var(--surface2); }
+tbody td { padding: 10px 16px; font-size: 13px; vertical-align: middle; }
+
+.commit-author { display: flex; align-items: center; gap: 8px; }
+.commit-author img { width: 22px; height: 22px; border-radius: 50%; }
+.commit-sha { font-family: monospace; font-size: 12px; color: var(--accent); }
+.commit-sha:hover { text-decoration: underline; }
+.commit-msg { max-width: 380px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.commit-date { color: var(--text-muted); white-space: nowrap; }
+
+/* ── Empty / Loading states ── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+  gap: 12px;
+  text-align: center;
+}
+
+.empty-state svg { opacity: 0.3; }
+.empty-state p { font-size: 15px; }
+.empty-state span { font-size: 13px; opacity: 0.7; }
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.loading-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ── Badge ── */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(88,166,255,0.15);
+  color: var(--accent);
+}
+
+/* ── Token hint ── */
+.token-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.token-hint a { color: var(--accent); text-decoration: none; }
+.token-hint a:hover { text-decoration: underline; }
+.link-btn { background: none; border: none; padding: 0; color: var(--accent); font-size: inherit; cursor: pointer; text-decoration: underline; }
+
+/* ── Tab nav ── */
+.tab-nav {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  cursor: pointer;
+}
+
+.tab-btn:hover { color: var(--text); background: var(--surface2); }
+.tab-btn.active { color: var(--text); background: var(--surface2); border-color: var(--border); }
+
+/* ── 5-col config grid ── */
+.config-grid-5 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+@media (max-width: 900px) {
+  .config-grid-5 { grid-template-columns: 1fr 1fr; }
+}
+
+/* ── Days badge ── */
+.days-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(88,166,255,0.12);
+  color: var(--accent);
+}
+.days-badge.warn {
+  background: rgba(248,81,73,0.12);
+  color: var(--danger);
+}
+
+/* ── GitHub link chip (in expanded Jira row) ── */
+.gh-link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: border-color 0.15s, background 0.15s;
+}
+.gh-link-chip:hover { border-color: var(--accent); background: rgba(88,166,255,0.08); }
+
+/* ── Status bar ── */
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin-bottom: 20px;
+}
+
+.status-bar-left  { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.status-bar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── Settings page ── */
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-width: 820px;
+}
+
+.settings-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px 28px;
+  margin-bottom: 16px;
+}
+
+.settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--text-muted);
+  margin-bottom: 18px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 700px) {
+  .settings-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Date picker dark theme overrides ── */
+.date-range-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.dp-input { width: 130px !important; cursor: pointer; }
+
+.dp-calendar {
+  background: var(--surface2) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  font-family: inherit !important;
+  font-size: 12px !important;
+}
+
+.react-datepicker__header {
+  background: var(--surface) !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.react-datepicker__current-month,
+.react-datepicker__day-name,
+.react-datepicker-time__header,
+.react-datepicker__year-read-view--down-arrow,
+.react-datepicker__month-read-view--down-arrow {
+  color: var(--text) !important;
+}
+
+.react-datepicker__day {
+  color: var(--text) !important;
+  border-radius: 4px !important;
+}
+
+.react-datepicker__day:hover {
+  background: var(--surface) !important;
+  color: var(--accent) !important;
+}
+
+.react-datepicker__day--selected,
+.react-datepicker__day--range-start,
+.react-datepicker__day--range-end {
+  background: var(--accent) !important;
+  color: #0d1117 !important;
+  font-weight: 600 !important;
+}
+
+.react-datepicker__day--in-range,
+.react-datepicker__day--in-selecting-range {
+  background: rgba(88,166,255,0.2) !important;
+  color: var(--text) !important;
+}
+
+.react-datepicker__day--outside-month { color: var(--text-muted) !important; opacity: 0.4; }
+.react-datepicker__day--disabled      { opacity: 0.3 !important; cursor: default !important; }
+
+.react-datepicker__navigation-icon::before {
+  border-color: var(--text-muted) !important;
+}
+
+.react-datepicker__triangle { display: none !important; }
+
+.react-datepicker-popper { z-index: 200 !important; }
+
+/* ── Mapping table ── */
+.mapping-table {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.mapping-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr 32px;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.mapping-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 32px;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+
+.mapping-row:last-child { border-bottom: none; }
+
+.mapping-row .input { font-size: 12px; padding: 5px 8px; }
+
+.mapping-remove {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.mapping-remove:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ── Performance cards ── */
+.perf-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  min-width: 220px;
+  flex: 1;
+}
+
+.perf-card-focused { box-shadow: 0 0 0 2px var(--accent); }
+
+.perf-name { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
+.perf-sub  { font-size: 11px; color: var(--text-muted); margin-bottom: 12px; }
+
+.perf-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+
+.perf-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.perf-metric span { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
+.perf-metric strong { font-size: 16px; }
+
+/* ── Day hover bar (commits over time chart) ── */
+.day-hover-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  transition: border-color 0.15s;
+}
+
+.day-hover-bar:has(.day-hover-link) {
+  border-color: var(--accent);
+}
+
+.day-hover-date { color: var(--text-muted); }
+
+.day-hover-count { font-weight: 600; color: var(--text); }
+
+.day-hover-hint { color: var(--text-muted); font-style: italic; }
+
+.day-hover-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+  padding: 2px 8px;
+  background: rgba(88,166,255,0.12);
+  border-radius: 4px;
+  border: 1px solid rgba(88,166,255,0.3);
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.day-hover-link:hover {
+  background: rgba(88,166,255,0.25);
+  text-decoration: none;
+}
+
+/* ── Pagination ── */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-muted);
+  justify-content: flex-end;
+}
+
+/* ── InfoTip ── */
+.infotip-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+.infotip-icon {
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: help;
+  line-height: 1;
+  transition: color 0.15s;
+}
+.infotip-wrap:hover .infotip-icon { color: var(--accent); }
+.infotip-bubble {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 280px;
+  background: #21262d;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 13px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--text);
+  z-index: 200;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  white-space: normal;
+}
+/* arrow */
+.infotip-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--border);
+}
+.infotip-wrap:hover .infotip-bubble { display: block; }
