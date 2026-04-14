@@ -1,5 +1,5 @@
 """
-ARO-HCP Dashboard — Jira backend
+Associate Performance Metrics — Jira backend
 Start: uvicorn main:app --reload --port 8000
 
 Supports both Jira Data Center (Bearer PAT) and Atlassian Cloud (Basic Auth
@@ -53,7 +53,7 @@ logging.basicConfig(level=logging.DEBUG,
                     format="%(asctime)s %(levelname)-8s %(message)s")
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="ARO-HCP Jira Proxy")
+app = FastAPI(title="Associate Performance Metrics — Jira Proxy")
 
 app.add_middleware(
     CORSMiddleware,

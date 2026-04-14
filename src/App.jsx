@@ -1602,7 +1602,7 @@ export default function App() {
                 <div>
                   <strong>Python backend is not running.</strong>{'\n'}
                   Open a terminal and run:{'\n\n'}
-                  {'  cd "' + window.location.pathname.split('/')[0] + 'aro-hcp-dashboard/backend"'}{'\n'}
+                  {'  cd "' + window.location.pathname.split('/')[0] + 'associate-performance-metrics/backend"'}{'\n'}
                   {'  pip install -r requirements.txt'}{'\n'}
                   {'  uvicorn main:app --reload --port 8000'}
                 </div>

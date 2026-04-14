@@ -25,7 +25,7 @@ async function backendFetch(path, jiraUrl, token, email, params = {}) {
     throw new Error(
       'Cannot reach the Python backend at localhost:8000.\n' +
       'Run this in a terminal:\n' +
-      '  cd aro-hcp-dashboard/backend\n' +
+      '  cd associate-performance-metrics/backend\n' +
       '  uvicorn main:app --reload --port 8000'
     );
   }
