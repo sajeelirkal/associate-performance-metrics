@@ -943,24 +943,28 @@ export default function App() {
 
   const glCommitsPerAuthorData = useMemo(() => {
     const counts = {};
-    glFilteredCommits.forEach(c => { counts[c.author] = (counts[c.author] || 0) + 1; });
+    glFilteredCommits.forEach(c => {
+      const key = ghDisplayName(glAuthorToGroup[(c.author || '').toLowerCase()] || c.author);
+      counts[key] = (counts[key] || 0) + 1;
+    });
     return Object.entries(counts).map(([author, commits]) => ({ author, commits }))
       .sort((a, b) => b.commits - a.commits).slice(0, 15);
-  }, [glFilteredCommits]);
+  }, [glFilteredCommits, glAuthorToGroup, ghDisplayName]);
 
   const glWeeklyStackedData = useMemo(() => {
     if (!glFilteredCommits.length) return { data: [], authors: [] };
     const authorSet = new Set(); const weeks = {};
     glFilteredCommits.forEach(c => {
       if (!c.date) return;
+      const resolved = ghDisplayName(glAuthorToGroup[(c.author || '').toLowerCase()] || c.author);
       const d = parseISO(c.date);
       const wk = format(startOfDay(d), "yyyy-'W'ww");
       if (!weeks[wk]) weeks[wk] = { week: format(d, 'MMM d'), _ts: d.getTime() };
-      weeks[wk][c.author] = (weeks[wk][c.author] || 0) + 1;
-      authorSet.add(c.author);
+      weeks[wk][resolved] = (weeks[wk][resolved] || 0) + 1;
+      authorSet.add(resolved);
     });
     return { data: Object.values(weeks).sort((a, b) => a._ts - b._ts), authors: [...authorSet] };
-  }, [glFilteredCommits]);
+  }, [glFilteredCommits, glAuthorToGroup, ghDisplayName]);
 
   const glDowData = useMemo(() => {
     const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -970,13 +974,13 @@ export default function App() {
   }, [glFilteredCommits]);
 
   const glStats = useMemo(() => {
-    const uniqueAuthors = new Set(glFilteredCommits.map(c => c.author)).size;
+    const uniqueAuthors = new Set(glFilteredCommits.map(c => glAuthorToGroup[(c.author || '').toLowerCase()] || c.author)).size;
     const activeDays = new Set(glFilteredCommits.map(c => c.date?.slice(0,10)).filter(Boolean)).size;
     return {
       total: glFilteredCommits.length, uniqueAuthors, activeDays,
       avgPerDay: activeDays ? (glFilteredCommits.length / activeDays).toFixed(1) : 0,
     };
-  }, [glFilteredCommits]);
+  }, [glFilteredCommits, glAuthorToGroup]);
 
   // ── Jira assignee matching helper ─────────────────────────────────────────
   // Matches assigneeJira (username like wehe.openshift) OR assigneeEmail
