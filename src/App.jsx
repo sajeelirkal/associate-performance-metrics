@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, RadarChart,
-  Radar, PolarGrid, PolarAngleAxis,
+  Radar, PolarGrid, PolarAngleAxis, LabelList,
 } from 'recharts';
 import { format, parseISO, eachDayOfInterval, subDays, subMonths, startOfDay } from 'date-fns';
 import DatePicker from 'react-datepicker';
@@ -972,6 +972,7 @@ export default function App() {
         case 'daysActive':  av = a.daysInProgress ?? -1; bv = b.daysInProgress ?? -1; break;
         case 'spillovers':  av = a.spillovers;     bv = b.spillovers;     break;
         case 'cycleTime':   av = a.cycleTime ?? -1; bv = b.cycleTime ?? -1; break;
+        case 'comments':    av = a.commentCount ?? 0; bv = b.commentCount ?? 0; break;
         case 'sp':          av = a.storyPoints ?? -1; bv = b.storyPoints ?? -1; break;
         case 'sprint':      av = a.currentSprint?.name ?? ''; bv = b.currentSprint?.name ?? ''; break;
         default:            return 0;
@@ -1051,6 +1052,18 @@ export default function App() {
       const totalSP          = doneIssues.reduce((s, i) => s + (i.storyPoints || 0), 0);
       const lastCommit       = ghCommits[0]?.date ?? myGlCommits[0]?.date ?? null;
 
+      const totalComments    = myIssues.reduce((s, i) => s + (i.commentCount ?? 0), 0);
+      const jiraTokens       = new Set([jira?.toLowerCase()].filter(Boolean));
+      if (jira?.includes('@')) jiraTokens.add(jira.split('@')[0].toLowerCase());
+      const commentsGiven    = myIssues.reduce((s, i) =>
+        s + (i.comments ?? []).filter(c => {
+          const cId    = c.authorId?.toLowerCase() ?? '';
+          const cEmail = c.authorEmail?.toLowerCase() ?? '';
+          const cLocal = cEmail.includes('@') ? cEmail.split('@')[0] : cEmail;
+          return jiraTokens.has(cId) || jiraTokens.has(cEmail) || jiraTokens.has(cLocal);
+        }).length, 0);
+      const statusChanges    = myIssues.reduce((s, i) => s + (i.statusTransitions?.length ?? 0), 0);
+
       return {
         github, jira,
         displayName: cleanDisplayName(jiraDisplay) || (!looksLikeId(jira) ? jira : null) || github,
@@ -1072,6 +1085,9 @@ export default function App() {
         totalSP,
         commitsPerIssue: doneIssues.length ? ((ghCommits.length + myGlCommits.length) / doneIssues.length).toFixed(1) : '—',
         lastCommit,
+        totalComments,
+        commentsGiven,
+        statusChanges,
       };
     }).filter(p => p.commits > 0 || p.glCommits > 0 || p.glMRsOpened > 0 || p.glMRsMerged > 0 || p.glMRsReviewed > 0 || p.issuesTotal > 0);
   }, [userMapping, associateList, commits, glCommits, glMRMetrics, jiraIssues, issueMatchesAssignee, glCommitMatchesAssociate]);
@@ -1813,13 +1829,14 @@ export default function App() {
                   <div className="chart-card">
                     <h3>Commits by Author</h3>
                     <ResponsiveContainer width="100%" height={260}>
-                      <BarChart data={commitsPerAuthorData} layout="vertical" margin={{ top:0, right:16, left:20, bottom:0 }}>
+                      <BarChart data={commitsPerAuthorData} layout="vertical" margin={{ top:0, right:30, left:20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" horizontal={false} />
                         <XAxis type="number" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} />
                         <YAxis type="category" dataKey="author" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} width={90} />
                         <Tooltip content={<ChartTooltip />} />
                         <Bar dataKey="commits" name="Commits" radius={[0,4,4,0]}>
                           {commitsPerAuthorData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                          <LabelList dataKey="commits" position="right" fill="#8b949e" fontSize={10} />
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -1829,13 +1846,14 @@ export default function App() {
                   <div className="chart-card">
                     <h3>Activity by Day of Week</h3>
                     <ResponsiveContainer width="100%" height={260}>
-                      <BarChart data={dowData} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+                      <BarChart data={dowData} margin={{ top:16, right:8, left:-20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                         <XAxis dataKey="day" tick={{ fill:'#8b949e', fontSize:12 }} tickLine={false} />
                         <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                         <Tooltip content={<ChartTooltip />} />
                         <Bar dataKey="commits" name="Commits" radius={[4,4,0,0]}>
                           {dowData.map((_, i) => <Cell key={i} fill={i===0||i===6?'#f78166':'#3fb950'} />)}
+                          <LabelList dataKey="commits" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -1928,14 +1946,18 @@ export default function App() {
                         <div className="chart-card">
                           <h3>PRs Opened vs Merged</h3>
                           <ResponsiveContainer width="100%" height={240}>
-                            <BarChart data={prRows} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+                            <BarChart data={prRows} margin={{ top:16, right:8, left:-20, bottom:0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                               <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                               <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                               <Tooltip content={<ChartTooltip />} />
                               <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
-                              <Bar dataKey="prsOpened" name="Opened" fill="var(--accent)"  radius={[4,4,0,0]} />
-                              <Bar dataKey="prsMerged" name="Merged" fill="var(--accent2)" radius={[4,4,0,0]} />
+                              <Bar dataKey="prsOpened" name="Opened" fill="var(--accent)"  radius={[4,4,0,0]}>
+                                <LabelList dataKey="prsOpened" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
+                              <Bar dataKey="prsMerged" name="Merged" fill="var(--accent2)" radius={[4,4,0,0]}>
+                                <LabelList dataKey="prsMerged" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
                             </BarChart>
                           </ResponsiveContainer>
                         </div>
@@ -1944,14 +1966,18 @@ export default function App() {
                         <div className="chart-card">
                           <h3>Code Reviews Given</h3>
                           <ResponsiveContainer width="100%" height={240}>
-                            <BarChart data={prRows} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+                            <BarChart data={prRows} margin={{ top:16, right:8, left:-20, bottom:0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                               <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                               <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                               <Tooltip content={<ChartTooltip />} />
                               <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
-                              <Bar dataKey="prsReviewed"    name="PRs Reviewed"    fill="var(--accent4)" radius={[4,4,0,0]} />
-                              <Bar dataKey="reviewComments" name="Review Comments" fill="#d2a8ff"         radius={[4,4,0,0]} />
+                              <Bar dataKey="prsReviewed"    name="PRs Reviewed"    fill="var(--accent4)" radius={[4,4,0,0]}>
+                                <LabelList dataKey="prsReviewed" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
+                              <Bar dataKey="reviewComments" name="Review Comments" fill="#d2a8ff"         radius={[4,4,0,0]}>
+                                <LabelList dataKey="reviewComments" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
                             </BarChart>
                           </ResponsiveContainer>
                         </div>
@@ -1964,15 +1990,19 @@ export default function App() {
                             </span>
                           </h3>
                           <ResponsiveContainer width="100%" height={240}>
-                            <BarChart data={prRows} margin={{ top:0, right:40, left:-20, bottom:0 }}>
+                            <BarChart data={prRows} margin={{ top:16, right:40, left:-20, bottom:0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                               <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                               <YAxis yAxisId="count" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                               <YAxis yAxisId="days"  orientation="right" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} unit="d" />
                               <Tooltip content={<ChartTooltip />} />
                               <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
-                              <Bar yAxisId="count" dataKey="prsChurned"      name="PRs Churned"        fill="var(--danger)" radius={[4,4,0,0]} />
-                              <Bar yAxisId="days"  dataKey="avgCycleTimeDays" name="Avg Cycle Time (d)" fill="var(--accent5)" radius={[4,4,0,0]} />
+                              <Bar yAxisId="count" dataKey="prsChurned"      name="PRs Churned"        fill="var(--danger)" radius={[4,4,0,0]}>
+                                <LabelList dataKey="prsChurned" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
+                              <Bar yAxisId="days"  dataKey="avgCycleTimeDays" name="Avg Cycle Time (d)" fill="var(--accent5)" radius={[4,4,0,0]}>
+                                <LabelList dataKey="avgCycleTimeDays" position="top" fill="#8b949e" fontSize={10} formatter={v => v != null ? `${v}d` : ''} />
+                              </Bar>
                             </BarChart>
                           </ResponsiveContainer>
                         </div>
@@ -2113,13 +2143,14 @@ export default function App() {
                   <div className="chart-card">
                     <h3>Commits by Author</h3>
                     <ResponsiveContainer width="100%" height={260}>
-                      <BarChart data={glCommitsPerAuthorData} layout="vertical" margin={{ top:0, right:16, left:20, bottom:0 }}>
+                      <BarChart data={glCommitsPerAuthorData} layout="vertical" margin={{ top:0, right:30, left:20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" horizontal={false} />
                         <XAxis type="number" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} />
                         <YAxis type="category" dataKey="author" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} width={90} />
                         <Tooltip content={<ChartTooltip />} />
                         <Bar dataKey="commits" name="Commits" radius={[0,4,4,0]}>
                           {glCommitsPerAuthorData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                          <LabelList dataKey="commits" position="right" fill="#8b949e" fontSize={10} />
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -2129,13 +2160,14 @@ export default function App() {
                   <div className="chart-card">
                     <h3>Activity by Day of Week</h3>
                     <ResponsiveContainer width="100%" height={260}>
-                      <BarChart data={glDowData} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+                      <BarChart data={glDowData} margin={{ top:16, right:8, left:-20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                         <XAxis dataKey="day" tick={{ fill:'#8b949e', fontSize:12 }} tickLine={false} />
                         <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                         <Tooltip content={<ChartTooltip />} />
                         <Bar dataKey="commits" name="Commits" radius={[4,4,0,0]}>
                           {glDowData.map((_, i) => <Cell key={i} fill={i===0||i===6?'#f78166':'#3fb950'} />)}
+                          <LabelList dataKey="commits" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -2192,27 +2224,35 @@ export default function App() {
                         <div className="chart-card">
                           <h3>MRs Opened vs Merged</h3>
                           <ResponsiveContainer width="100%" height={240}>
-                            <BarChart data={mrAuthors} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+                            <BarChart data={mrAuthors} margin={{ top:16, right:8, left:-20, bottom:0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                               <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                               <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                               <Tooltip content={<ChartTooltip />} />
                               <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
-                              <Bar dataKey="mrsOpened" name="Opened" fill="#FC6D26" radius={[4,4,0,0]} />
-                              <Bar dataKey="mrsMerged" name="Merged" fill="var(--accent2)" radius={[4,4,0,0]} />
+                              <Bar dataKey="mrsOpened" name="Opened" fill="#FC6D26" radius={[4,4,0,0]}>
+                                <LabelList dataKey="mrsOpened" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
+                              <Bar dataKey="mrsMerged" name="Merged" fill="var(--accent2)" radius={[4,4,0,0]}>
+                                <LabelList dataKey="mrsMerged" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
                             </BarChart>
                           </ResponsiveContainer>
                         </div>
                         <div className="chart-card">
                           <h3>Reviews Given</h3>
                           <ResponsiveContainer width="100%" height={240}>
-                            <BarChart data={mrAuthors} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+                            <BarChart data={mrAuthors} margin={{ top:16, right:8, left:-20, bottom:0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                               <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                               <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                               <Tooltip content={<ChartTooltip />} />
-                              <Bar dataKey="mrsReviewed" name="MRs Reviewed" fill="var(--accent4)" radius={[4,4,0,0]} />
-                              <Bar dataKey="reviewNotes" name="Review Notes" fill="#d2a8ff" radius={[4,4,0,0]} />
+                              <Bar dataKey="mrsReviewed" name="MRs Reviewed" fill="var(--accent4)" radius={[4,4,0,0]}>
+                                <LabelList dataKey="mrsReviewed" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
+                              <Bar dataKey="reviewNotes" name="Review Notes" fill="#d2a8ff" radius={[4,4,0,0]}>
+                                <LabelList dataKey="reviewNotes" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
                             </BarChart>
                           </ResponsiveContainer>
                         </div>
@@ -2315,6 +2355,7 @@ export default function App() {
                         return v.length ? `${Math.round(v.reduce((a,b)=>a+b,0)/v.length)}d` : '—';
                       })(), color:'var(--accent4)' },
                     { label:'Total Spillovers', value: filteredJiraIssues.reduce((s,i)=>s+i.spillovers,0), color:'var(--danger)' },
+                    { label:'Total Comments',  value: filteredJiraIssues.reduce((s,i)=>s+(i.commentCount??0),0), color:'#d2a8ff' },
                   ].map(s => (
                     <div key={s.label} className="stat-card">
                       <div className="label">{s.label}</div>
@@ -2371,33 +2412,35 @@ export default function App() {
                 </div>
 
                 {/* ── Contribution Share charts ── */}
-                {jiraContribData.length > 1 && (
+                {jiraContribData.length > 0 && (
                   <div className="charts-grid" style={{ marginBottom: 20 }}>
-                    {/* Pie — total issue share */}
-                    <div className="chart-card">
-                      <h3>Contribution Share
-                        <span style={{ fontSize:12, fontWeight:400, color:'var(--text-muted)', marginLeft:8 }}>by total issues</span>
-                      </h3>
-                      <ResponsiveContainer width="100%" height={260}>
-                        <PieChart>
-                          <Pie
-                            data={jiraContribData} dataKey="total" nameKey="label"
-                            cx="50%" cy="50%" outerRadius={90}
-                            label={({ label, percent }) => `${label} ${(percent*100).toFixed(0)}%`}
-                            labelLine={false}
-                          >
-                            {jiraContribData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                          </Pie>
-                          <Tooltip
-                            contentStyle={{ background:'#21262d', border:'1px solid #30363d', borderRadius:8, color:'#e6edf3' }}
-                            formatter={(v, _n, props) => [`${v} issues (${props.payload.done} done, ${props.payload.open} open)`, props.payload.fullLabel]}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </div>
+                    {/* Pie — total issue share (only useful for multi-user views) */}
+                    {jiraContribData.length > 1 && (
+                      <div className="chart-card">
+                        <h3>Contribution Share
+                          <span style={{ fontSize:12, fontWeight:400, color:'var(--text-muted)', marginLeft:8 }}>by total issues</span>
+                        </h3>
+                        <ResponsiveContainer width="100%" height={260}>
+                          <PieChart>
+                            <Pie
+                              data={jiraContribData} dataKey="total" nameKey="label"
+                              cx="50%" cy="50%" outerRadius={90}
+                              label={({ label, percent }) => `${label} ${(percent*100).toFixed(0)}%`}
+                              labelLine={false}
+                            >
+                              {jiraContribData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                            </Pie>
+                            <Tooltip
+                              contentStyle={{ background:'#21262d', border:'1px solid #30363d', borderRadius:8, color:'#e6edf3' }}
+                              formatter={(v, _n, props) => [`${v} issues (${props.payload.done} done, ${props.payload.open} open)`, props.payload.fullLabel]}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
 
-                    {/* Pie — done-only share */}
-                    {jiraContribData.some(p => p.done > 0) && (
+                    {/* Pie — done-only share (only useful for multi-user views) */}
+                    {jiraContribData.length > 1 && jiraContribData.some(p => p.done > 0) && (
                       <div className="chart-card">
                         <h3>Done Issues Share
                           <span style={{ fontSize:12, fontWeight:400, color:'var(--text-muted)', marginLeft:8 }}>completed in period</span>
@@ -2428,14 +2471,18 @@ export default function App() {
                         <span style={{ fontSize:12, fontWeight:400, color:'var(--text-muted)', marginLeft:8 }}>done vs open</span>
                       </h3>
                       <ResponsiveContainer width="100%" height={260}>
-                        <BarChart data={jiraContribData} margin={{ top:0, right:16, left:-20, bottom:0 }}>
+                        <BarChart data={jiraContribData} margin={{ top:16, right:16, left:-20, bottom:0 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                           <XAxis dataKey="label" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                           <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                           <Tooltip content={<ChartTooltip />} />
                           <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
-                          <Bar dataKey="done" name="Done"        stackId="a" fill="#3fb950" radius={[0,0,0,0]} />
-                          <Bar dataKey="open" name="Open/Active" stackId="a" fill="#ffa657" radius={[4,4,0,0]} />
+                          <Bar dataKey="done" name="Done"        stackId="a" fill="#3fb950" radius={[0,0,0,0]}>
+                            <LabelList dataKey="done" position="inside" fill="#fff" fontSize={10} formatter={v => v || ''} />
+                          </Bar>
+                          <Bar dataKey="open" name="Open/Active" stackId="a" fill="#ffa657" radius={[4,4,0,0]}>
+                            <LabelList dataKey="open" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                          </Bar>
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
@@ -2447,13 +2494,14 @@ export default function App() {
                           <span style={{ fontSize:12, fontWeight:400, color:'var(--text-muted)', marginLeft:8 }}>done issues only</span>
                         </h3>
                         <ResponsiveContainer width="100%" height={260}>
-                          <BarChart data={jiraContribData} margin={{ top:0, right:16, left:-20, bottom:0 }}>
+                          <BarChart data={jiraContribData} margin={{ top:16, right:16, left:-20, bottom:0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                             <XAxis dataKey="label" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                             <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                             <Tooltip content={<ChartTooltip />} />
                             <Bar dataKey="sp" name="Story Points" radius={[4,4,0,0]}>
                               {jiraContribData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                              <LabelList dataKey="sp" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
                             </Bar>
                           </BarChart>
                         </ResponsiveContainer>
@@ -2480,6 +2528,8 @@ export default function App() {
                             { label: 'Days Active', key: 'daysActive' },
                             { label: 'Spillovers',  key: 'spillovers' },
                             { label: 'Cycle Time',  key: 'cycleTime' },
+                            { label: 'Comments',    key: 'comments' },
+                            { label: 'Status Flow', key: null },
                             { label: 'SP',          key: 'sp' },
                             { label: 'Sprint',      key: 'sprint' },
                             { label: 'GitHub Links', key: null },
@@ -2500,7 +2550,7 @@ export default function App() {
                       </thead>
                       <tbody>
                         {pagedJira.length === 0 ? (
-                          <tr><td colSpan={11} style={{ textAlign:'center', padding:32, color:'var(--text-muted)' }}>No issues match current filters</td></tr>
+                          <tr><td colSpan={13} style={{ textAlign:'center', padding:32, color:'var(--text-muted)' }}>No issues match current filters</td></tr>
                         ) : pagedJira.map(issue => {
                           const links = remoteLinks[issue.key] ?? [];
                           const isExpanded = expandedIssue === issue.key;
@@ -2533,6 +2583,26 @@ export default function App() {
                                     : <span style={{ color:'var(--accent2)' }}>0</span>}
                                 </td>
                                 <td>{issue.cycleTime !== null ? `${issue.cycleTime}d` : '—'}</td>
+                                <td>
+                                  {(issue.commentCount ?? 0) > 0
+                                    ? <span className="badge" style={{ background:'rgba(210,168,255,0.15)', color:'#d2a8ff' }}>{issue.commentCount}</span>
+                                    : <span style={{ color:'var(--text-muted)' }}>0</span>}
+                                </td>
+                                <td style={{ fontSize:11, whiteSpace:'nowrap', maxWidth:180, overflow:'hidden', textOverflow:'ellipsis' }}
+                                    title={issue.statusTransitions?.map(t => `${t.from} → ${t.to}`).join(', ')}>
+                                  {issue.statusTransitions?.length > 0
+                                    ? (() => {
+                                        const steps = [issue.statusTransitions[0].from, ...issue.statusTransitions.map(t => t.to)];
+                                        const unique = steps.filter((s, i) => i === 0 || s !== steps[i-1]);
+                                        return unique.map((s, i) => (
+                                          <span key={i}>
+                                            {i > 0 && <span style={{ color:'var(--text-muted)', margin:'0 2px' }}>→</span>}
+                                            <span style={{ color: statusColor(s), fontWeight: 500 }}>{s}</span>
+                                          </span>
+                                        ));
+                                      })()
+                                    : <span style={{ color:'var(--text-muted)' }}>—</span>}
+                                </td>
                                 <td>{issue.storyPoints ?? '—'}</td>
                                 <td style={{ fontSize:11, color:'var(--text-muted)', maxWidth:130, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
                                   {issue.currentSprint?.name ?? '—'}
@@ -2546,7 +2616,7 @@ export default function App() {
                               {/* Expanded GitHub links row */}
                               {isExpanded && links.length > 0 && (
                                 <tr key={`${issue.key}-links`} style={{ background:'var(--surface2)' }}>
-                                  <td colSpan={11} style={{ padding:'8px 16px' }}>
+                                  <td colSpan={13} style={{ padding:'8px 16px' }}>
                                     <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
                                       {links.map((l, idx) => (
                                         <a key={idx} href={l.object.url} target="_blank" rel="noreferrer"
@@ -2672,6 +2742,8 @@ export default function App() {
                         <div className="perf-metric"><span>Avg Cycle</span><strong>{p.avgCycleTime !== null ? `${p.avgCycleTime}d` : '—'}</strong></div>
                         <div className="perf-metric"><span>Spillovers</span><strong style={{ color: p.totalSpillovers>0?'var(--danger)':'var(--accent2)' }}>{p.totalSpillovers}</strong></div>
                         <div className="perf-metric"><span>Story Pts</span><strong style={{ color:'var(--accent4)' }}>{p.totalSP || '—'}</strong></div>
+                        <div className="perf-metric"><span>Jira Comments</span><strong style={{ color:'#d2a8ff' }}>{p.commentsGiven ?? '—'}</strong></div>
+                        <div className="perf-metric"><span>Status Changes</span><strong>{p.statusChanges ?? '—'}</strong></div>
                         {pr && <>
                           <div className="perf-metric" style={{ borderTop:'1px solid var(--border)', gridColumn:'1/-1', paddingTop:4, marginTop:2 }}/>
                           <div className="perf-metric"><span>GH PRs Merged</span><strong style={{ color:'var(--accent)' }}>{pr.prsMerged ?? '—'}</strong></div>
@@ -2705,14 +2777,18 @@ export default function App() {
                   <div className="chart-card">
                     <h3>Commits vs Issues Resolved</h3>
                     <ResponsiveContainer width="100%" height={260}>
-                      <BarChart data={chartPerf} margin={{ top:0, right:16, left:-20, bottom:0 }}>
+                      <BarChart data={chartPerf} margin={{ top:16, right:16, left:-20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                         <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                         <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                         <Tooltip content={<ChartTooltip />} />
                         <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
-                        <Bar dataKey="commits"     name="Commits"        fill="#58a6ff" radius={[4,4,0,0]} />
-                        <Bar dataKey="issuesDone"  name="Issues Resolved" fill="#3fb950" radius={[4,4,0,0]} />
+                        <Bar dataKey="commits"     name="Commits"        fill="#58a6ff" radius={[4,4,0,0]}>
+                          <LabelList dataKey="commits" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                        </Bar>
+                        <Bar dataKey="issuesDone"  name="Issues Resolved" fill="#3fb950" radius={[4,4,0,0]}>
+                          <LabelList dataKey="issuesDone" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -2721,14 +2797,18 @@ export default function App() {
                   <div className="chart-card">
                     <h3>Average Cycle Time (days) &amp; Spillovers</h3>
                     <ResponsiveContainer width="100%" height={260}>
-                      <BarChart data={chartPerf} margin={{ top:0, right:16, left:-20, bottom:0 }}>
+                      <BarChart data={chartPerf} margin={{ top:16, right:16, left:-20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                         <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                         <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                         <Tooltip content={<ChartTooltip />} />
                         <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
-                        <Bar dataKey="avgCycleTime"       name="Avg Cycle Time (d)"  fill="#d2a8ff" radius={[4,4,0,0]} />
-                        <Bar dataKey="totalSpillovers"    name="Sprint Spillovers"   fill="#f78166" radius={[4,4,0,0]} />
+                        <Bar dataKey="avgCycleTime"       name="Avg Cycle Time (d)"  fill="#d2a8ff" radius={[4,4,0,0]}>
+                          <LabelList dataKey="avgCycleTime" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                        </Bar>
+                        <Bar dataKey="totalSpillovers"    name="Sprint Spillovers"   fill="#f78166" radius={[4,4,0,0]}>
+                          <LabelList dataKey="totalSpillovers" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -2772,13 +2852,36 @@ export default function App() {
                     <div className="chart-card">
                       <h3>Story Points Completed</h3>
                       <ResponsiveContainer width="100%" height={260}>
-                        <BarChart data={chartPerf} margin={{ top:0, right:16, left:-20, bottom:0 }}>
+                        <BarChart data={chartPerf} margin={{ top:16, right:16, left:-20, bottom:0 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                           <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                           <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                           <Tooltip content={<ChartTooltip />} />
                           <Bar dataKey="totalSP" name="Story Points" radius={[4,4,0,0]}>
                             {chartPerf.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
+                            <LabelList dataKey="totalSP" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {/* Jira Engagement — comments given + status transitions */}
+                  {chartPerf.some(p => (p.commentsGiven ?? 0) > 0 || (p.statusChanges ?? 0) > 0) && (
+                    <div className="chart-card">
+                      <h3>Jira Engagement</h3>
+                      <ResponsiveContainer width="100%" height={260}>
+                        <BarChart data={chartPerf} margin={{ top:16, right:16, left:-20, bottom:0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+                          <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                          <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
+                          <Bar dataKey="commentsGiven" name="Comments Given" fill="#d2a8ff" radius={[4,4,0,0]}>
+                            <LabelList dataKey="commentsGiven" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                          </Bar>
+                          <Bar dataKey="statusChanges" name="Status Transitions" fill="#79c0ff" radius={[4,4,0,0]}>
+                            <LabelList dataKey="statusChanges" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
                           </Bar>
                         </BarChart>
                       </ResponsiveContainer>
@@ -2804,6 +2907,7 @@ export default function App() {
                           <th>Issues Open</th>
                           <th>Avg Cycle (d)</th>
                           <th>Spillovers</th>
+                          <th>Jira Comments</th>
                           <th>Story Points</th>
                           <th>GH PRs Merged</th>
                           <th>GL MRs Merged</th>
@@ -2834,6 +2938,7 @@ export default function App() {
                                 {p.totalSpillovers}
                               </span>
                             </td>
+                            <td style={{ color:'#d2a8ff', fontWeight:600 }}>{p.commentsGiven ?? '—'}</td>
                             <td style={{ color:'var(--accent4)', fontWeight:600 }}>{p.totalSP ?? '—'}</td>
                             <td style={{ color:'var(--accent)', fontWeight:600 }}>{pr?.prsMerged ?? '—'}</td>
                             <td style={{ color:'#FC6D26', fontWeight:600 }}>{p.glMRsMerged ?? '—'}</td>

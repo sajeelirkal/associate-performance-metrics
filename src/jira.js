@@ -136,6 +136,36 @@ export function calcCycleTime(issue) {
   return Math.floor((resolved - created) / 86_400_000);
 }
 
+export function extractStatusTransitions(changelog) {
+  if (!changelog?.histories?.length) return [];
+  const transitions = [];
+  for (const h of changelog.histories) {
+    for (const item of h.items ?? []) {
+      if (item.field === 'status') {
+        transitions.push({
+          from:   item.fromString ?? '—',
+          to:     item.toString ?? '—',
+          date:   h.created,
+          author: h.author?.displayName ?? h.author?.name ?? '—',
+        });
+      }
+    }
+  }
+  transitions.sort((a, b) => new Date(a.date) - new Date(b.date));
+  return transitions;
+}
+
+function extractComments(fields) {
+  const raw = fields.comment?.comments ?? fields.comment?.body ?? [];
+  const comments = Array.isArray(raw) ? raw : [];
+  return comments.map(c => ({
+    author:      c.author?.displayName ?? c.author?.name ?? '—',
+    authorId:    c.author?.accountId ?? c.author?.name ?? '',
+    authorEmail: c.author?.emailAddress ?? '',
+    date:        c.created,
+  }));
+}
+
 // ── Normalise raw Jira issue → flat object ────────────────────────────────────
 
 const SP_CANDIDATES = [
@@ -161,6 +191,8 @@ function extractStoryPoints(fields, spField) {
 export function normaliseIssue(raw, spField = null) {
   const f           = raw.fields;
   const sprints     = parseSprints(f.customfield_10020);
+  const comments    = extractComments(f);
+  const statusTransitions = extractStatusTransitions(raw.changelog);
   return {
     key:             raw.key,
     url:             `${raw.self.split('/rest/')[0]}/browse/${raw.key}`,
@@ -181,6 +213,9 @@ export function normaliseIssue(raw, spField = null) {
     spillovers:      calcSprintSpillovers(raw.changelog),
     cycleTime:       calcCycleTime(raw),
     storyPoints:     extractStoryPoints(f, spField),
+    commentCount:    comments.length,
+    comments,
+    statusTransitions,
     remoteLinks:     [],
   };
 }
