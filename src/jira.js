@@ -206,6 +206,7 @@ export function normaliseIssue(raw, spField = null) {
     assigneeDisplay: f.assignee?.displayName ?? f.assignee?.name ?? '—',
     created:         f.created,
     updated:         f.updated,
+    resolution:      f.resolution?.name ?? null,
     resolutionDate:  f.resolutiondate ?? null,
     sprints,
     currentSprint:   sprints.find((s) => s.state === 'active') ?? sprints.at(-1) ?? null,

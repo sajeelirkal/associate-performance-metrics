@@ -298,6 +298,7 @@ export default function App() {
   const [jiraFetched, setJiraFetched] = useState(false);
   const [jiraSearch,  setJiraSearch]  = useState('');
   const [jiraFilter,  setJiraFilter]  = useState('all'); // all | open | done
+  const [jiraResFilter, setJiraResFilter] = useState('all'); // all | exclude-obsolete
   const [jiraPage,    setJiraPage]    = useState(1);
   const [expandedIssue, setExpandedIssue] = useState(null);
   const [workSummaryOpen, setWorkSummaryOpen] = useState(true);
@@ -829,28 +830,98 @@ export default function App() {
     return tokens.has(cAuthor) || tokens.has(cEmail) || (cPrefix && tokens.has(cPrefix));
   }, [glAuthorIndex]);
 
-  // Unique GL contributors (derived from actual commit data)
-  const glContributors = useMemo(() => {
+  // Unique GL contributors (derived from actual commit data).
+  // Returns { contributors, authorToGroup } where authorToGroup maps every
+  // lowercased raw author name to its canonical group key so that
+  // glFilteredCommits can match all name variants for a merged group.
+  const { glContributors, glAuthorToGroup } = useMemo(() => {
     const counts = {};
+    const people = userMapping.length > 0
+      ? userMapping
+      : associateList.map(g => ({ github: g, gitlab: '', jira: '', jiraDisplay: '' }));
+
+    const authorToGroup = {};   // lowercased raw author -> canonical group key
+    const unmatchedAuthors = [];
+
     glCommits.forEach(c => {
-      const name = c.author || 'unknown';
-      counts[name] = (counts[name] || 0) + 1;
+      const cAuthor = (c.author || '').toLowerCase();
+      const cEmail  = (c.authorEmail || '').toLowerCase();
+      const cPrefix = cEmail.split('@')[0];
+      let matched = null;
+      for (const p of people) {
+        const tokens = glAuthorIndex[p.github?.toLowerCase()];
+        if (tokens && (tokens.has(cAuthor) || tokens.has(cEmail) || (cPrefix && tokens.has(cPrefix)))) {
+          matched = p.github;
+          break;
+        }
+      }
+      if (matched) {
+        counts[matched] = (counts[matched] || 0) + 1;
+        authorToGroup[cAuthor] = matched;
+      } else {
+        unmatchedAuthors.push(c.author || 'unknown');
+      }
     });
-    return Object.entries(counts)
-      .map(([author, total]) => ({ login: author, totalContributions: total }))
+
+    // Group unmatched authors by word-overlap so name variants (e.g.
+    // "Miguel Soriano" vs "Miguel Soriano Domenech") merge into one entry.
+    const canonWords = {};  // canonical key -> Set of words
+    for (const raw of unmatchedAuthors) {
+      const lower = raw.toLowerCase();
+      if (authorToGroup[lower]) {
+        counts[authorToGroup[lower]] = (counts[authorToGroup[lower]] || 0) + 1;
+        continue;
+      }
+      const words = lower.split(/\s+/).filter(w => w.length > 1);
+      let merged = null;
+      if (words.length >= 2) {
+        for (const [key, kWords] of Object.entries(canonWords)) {
+          if (kWords.size < 2) continue;
+          const overlap = words.filter(w => kWords.has(w));
+          if (overlap.length >= 2 && overlap.length >= Math.min(words.length, kWords.size)) {
+            merged = key;
+            words.forEach(w => kWords.add(w));
+            break;
+          }
+        }
+      }
+      if (merged) {
+        authorToGroup[lower] = merged;
+        counts[merged] = (counts[merged] || 0) + 1;
+      } else {
+        authorToGroup[lower] = raw;
+        canonWords[raw] = new Set(words);
+        counts[raw] = (counts[raw] || 0) + 1;
+      }
+    }
+
+    for (const p of people) {
+      if (p.github && !(p.github in counts)) counts[p.github] = 0;
+    }
+
+    const contributors = Object.entries(counts)
+      .map(([login, total]) => ({ login, totalContributions: total }))
       .sort((a, b) => b.totalContributions - a.totalContributions);
-  }, [glCommits]);
+    return { glContributors: contributors, glAuthorToGroup: authorToGroup };
+  }, [glCommits, glAuthorIndex, userMapping, associateList]);
 
   const glFilteredCommits = useMemo(() => glCommits.filter(c => {
     if (activeAssociate) {
-      if (!glCommitMatchesAssociate(c, activeAssociate)) return false;
+      const hasIndex = !!glAuthorIndex[activeAssociate?.toLowerCase()];
+      if (hasIndex) {
+        if (!glCommitMatchesAssociate(c, activeAssociate)) return false;
+      } else {
+        const cAuthor = (c.author || '').toLowerCase();
+        const group = glAuthorToGroup[cAuthor];
+        if (group !== activeAssociate) return false;
+      }
     }
     if (glSearchMsg) {
       const q = glSearchMsg.toLowerCase();
       if (!c.message.toLowerCase().includes(q) && !c.author.toLowerCase().includes(q)) return false;
     }
     return true;
-  }), [glCommits, activeAssociate, glCommitMatchesAssociate, glSearchMsg]);
+  }), [glCommits, activeAssociate, glCommitMatchesAssociate, glAuthorIndex, glAuthorToGroup, glSearchMsg]);
 
   const glPagedCommits = useMemo(() => {
     const s = (glPage - 1) * PAGE_SIZE;
@@ -872,24 +943,28 @@ export default function App() {
 
   const glCommitsPerAuthorData = useMemo(() => {
     const counts = {};
-    glFilteredCommits.forEach(c => { counts[c.author] = (counts[c.author] || 0) + 1; });
+    glFilteredCommits.forEach(c => {
+      const key = ghDisplayName(glAuthorToGroup[(c.author || '').toLowerCase()] || c.author);
+      counts[key] = (counts[key] || 0) + 1;
+    });
     return Object.entries(counts).map(([author, commits]) => ({ author, commits }))
       .sort((a, b) => b.commits - a.commits).slice(0, 15);
-  }, [glFilteredCommits]);
+  }, [glFilteredCommits, glAuthorToGroup, ghDisplayName]);
 
   const glWeeklyStackedData = useMemo(() => {
     if (!glFilteredCommits.length) return { data: [], authors: [] };
     const authorSet = new Set(); const weeks = {};
     glFilteredCommits.forEach(c => {
       if (!c.date) return;
+      const resolved = ghDisplayName(glAuthorToGroup[(c.author || '').toLowerCase()] || c.author);
       const d = parseISO(c.date);
       const wk = format(startOfDay(d), "yyyy-'W'ww");
       if (!weeks[wk]) weeks[wk] = { week: format(d, 'MMM d'), _ts: d.getTime() };
-      weeks[wk][c.author] = (weeks[wk][c.author] || 0) + 1;
-      authorSet.add(c.author);
+      weeks[wk][resolved] = (weeks[wk][resolved] || 0) + 1;
+      authorSet.add(resolved);
     });
     return { data: Object.values(weeks).sort((a, b) => a._ts - b._ts), authors: [...authorSet] };
-  }, [glFilteredCommits]);
+  }, [glFilteredCommits, glAuthorToGroup, ghDisplayName]);
 
   const glDowData = useMemo(() => {
     const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -899,13 +974,13 @@ export default function App() {
   }, [glFilteredCommits]);
 
   const glStats = useMemo(() => {
-    const uniqueAuthors = new Set(glFilteredCommits.map(c => c.author)).size;
+    const uniqueAuthors = new Set(glFilteredCommits.map(c => glAuthorToGroup[(c.author || '').toLowerCase()] || c.author)).size;
     const activeDays = new Set(glFilteredCommits.map(c => c.date?.slice(0,10)).filter(Boolean)).size;
     return {
       total: glFilteredCommits.length, uniqueAuthors, activeDays,
       avgPerDay: activeDays ? (glFilteredCommits.length / activeDays).toFixed(1) : 0,
     };
-  }, [glFilteredCommits]);
+  }, [glFilteredCommits, glAuthorToGroup]);
 
   // ── Jira assignee matching helper ─────────────────────────────────────────
   // Matches assigneeJira (username like wehe.openshift) OR assigneeEmail
@@ -923,8 +998,9 @@ export default function App() {
   }, []);
 
   // ── Jira derived data ─────────────────────────────────────────────────────
+  const EXCLUDED_RESOLUTIONS = new Set(["won't do", "obsolete", "duplicate", "cannot reproduce"]);
+
   const filteredJiraIssues = useMemo(() => jiraIssues.filter(i => {
-    // Global associate filter — resolve github→jira mapping then token-match
     if (activeAssociate) {
       const row = userMapping.find(m => m.github.toLowerCase() === activeAssociate.toLowerCase());
       const jiraVal = row?.jira || activeAssociate;
@@ -932,15 +1008,17 @@ export default function App() {
     }
     if (jiraFilter === 'open' && i.statusCategory?.toLowerCase().includes('done')) return false;
     if (jiraFilter === 'done' && !i.statusCategory?.toLowerCase().includes('done')) return false;
+    if (jiraResFilter === 'exclude-obsolete' && i.resolution && EXCLUDED_RESOLUTIONS.has(i.resolution.toLowerCase())) return false;
     if (jiraSearch) {
       const q = jiraSearch.toLowerCase();
       return i.key.toLowerCase().includes(q) ||
              i.summary.toLowerCase().includes(q) ||
              i.assigneeDisplay.toLowerCase().includes(q) ||
-             i.status.toLowerCase().includes(q);
+             i.status.toLowerCase().includes(q) ||
+             (i.resolution && i.resolution.toLowerCase().includes(q));
     }
     return true;
-  }), [jiraIssues, jiraFilter, jiraSearch, activeAssociate, userMapping, issueMatchesAssignee]);
+  }), [jiraIssues, jiraFilter, jiraResFilter, jiraSearch, activeAssociate, userMapping, issueMatchesAssignee]);
 
   // ── Jira table sort ──────────────────────────────────────────────────────
   const [jiraSortKey, setJiraSortKey] = useState(null);
@@ -968,6 +1046,7 @@ export default function App() {
         case 'summary':     av = a.summary;        bv = b.summary;        break;
         case 'assignee':    av = a.assigneeDisplay; bv = b.assigneeDisplay; break;
         case 'status':      av = a.status;         bv = b.status;         break;
+        case 'resolution':  av = a.resolution ?? ''; bv = b.resolution ?? ''; break;
         case 'priority':    av = PRIORITY_ORDER[a.priority] ?? 99; bv = PRIORITY_ORDER[b.priority] ?? 99; break;
         case 'daysActive':  av = a.daysInProgress ?? -1; bv = b.daysInProgress ?? -1; break;
         case 'spillovers':  av = a.spillovers;     bv = b.spillovers;     break;
@@ -2169,26 +2248,18 @@ export default function App() {
                           className={`chip chip-all ${!activeAssociate ? 'active' : ''}`}
                           onClick={() => { setActiveAssociate(null); setGlPage(1); }}
                         >All</button>
-                        {glContributors.map(c => {
-                          const people = userMapping.length > 0 ? userMapping : associateList.map(g => ({ github: g, gitlab: '' }));
-                          const match = people.find(p => {
-                            const tokens = glAuthorIndex[p.github?.toLowerCase()];
-                            return tokens?.has(c.login.toLowerCase());
-                          });
-                          const ghLogin = match?.github || c.login;
-                          return (
-                            <button
-                              key={c.login}
-                              className={`chip ${activeAssociate?.toLowerCase() === ghLogin?.toLowerCase() ? 'active' : ''}`}
-                              onClick={() => {
-                                setActiveAssociate(prev => prev?.toLowerCase() === ghLogin?.toLowerCase() ? null : ghLogin);
-                                setGlPage(1);
-                              }}
-                            >
-                              {ghDisplayName(ghLogin)}
-                            </button>
-                          );
-                        })}
+                        {glContributors.map(c => (
+                          <button
+                            key={c.login}
+                            className={`chip ${activeAssociate?.toLowerCase() === c.login?.toLowerCase() ? 'active' : ''}`}
+                            onClick={() => {
+                              setActiveAssociate(prev => prev?.toLowerCase() === c.login?.toLowerCase() ? null : c.login);
+                              setGlPage(1);
+                            }}
+                          >
+                            {ghDisplayName(c.login)}
+                          </button>
+                        ))}
                       </div>
                     </div>
                   </div>
@@ -2491,6 +2562,17 @@ export default function App() {
                         ))}
                       </div>
                     </div>
+                    <div className="filter-group">
+                      <label>Resolution</label>
+                      <div className="chip-list">
+                        {['all','exclude-obsolete'].map(f => (
+                          <button key={f} className={`chip ${jiraResFilter===f?'active':''}`}
+                            onClick={() => { setJiraResFilter(f); setJiraPage(1); }}>
+                            {f === 'all' ? 'All' : 'Exclude Non-actionable'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <div className="filter-group" style={{ marginLeft:'auto' }}>
                       <label>Search</label>
                       <input className="input" type="text" placeholder="Key, summary, assignee…"
@@ -2612,6 +2694,7 @@ export default function App() {
                             { label: 'Summary',     key: 'summary' },
                             { label: 'Assignee',    key: 'assignee' },
                             { label: 'Status',      key: 'status' },
+                            { label: 'Resolution',  key: 'resolution' },
                             { label: 'Priority',    key: 'priority' },
                             { label: 'Days Active', key: 'daysActive' },
                             { label: 'Spillovers',  key: 'spillovers' },
@@ -2638,7 +2721,7 @@ export default function App() {
                       </thead>
                       <tbody>
                         {pagedJira.length === 0 ? (
-                          <tr><td colSpan={13} style={{ textAlign:'center', padding:32, color:'var(--text-muted)' }}>No issues match current filters</td></tr>
+                          <tr><td colSpan={14} style={{ textAlign:'center', padding:32, color:'var(--text-muted)' }}>No issues match current filters</td></tr>
                         ) : pagedJira.map(issue => {
                           const links = remoteLinks[issue.key] ?? [];
                           const isExpanded = expandedIssue === issue.key;
@@ -2658,6 +2741,11 @@ export default function App() {
                                   <span style={{ color: statusColor(issue.status), fontWeight:600, fontSize:12 }}>
                                     {issue.status}
                                   </span>
+                                </td>
+                                <td style={{ whiteSpace:'nowrap', fontSize:12 }}>
+                                  {issue.resolution
+                                    ? <span style={{ color: EXCLUDED_RESOLUTIONS.has(issue.resolution.toLowerCase()) ? '#f85149' : 'var(--accent2)', fontWeight:500 }}>{issue.resolution}</span>
+                                    : <span style={{ color:'var(--text-muted)' }}>—</span>}
                                 </td>
                                 <td style={{ whiteSpace:'nowrap' }}>{priorityIcon(issue.priority)} {issue.priority}</td>
                                 <td>
@@ -2704,7 +2792,7 @@ export default function App() {
                               {/* Expanded GitHub links row */}
                               {isExpanded && links.length > 0 && (
                                 <tr key={`${issue.key}-links`} style={{ background:'var(--surface2)' }}>
-                                  <td colSpan={13} style={{ padding:'8px 16px' }}>
+                                  <td colSpan={14} style={{ padding:'8px 16px' }}>
                                     <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
                                       {links.map((l, idx) => (
                                         <a key={idx} href={l.object.url} target="_blank" rel="noreferrer"
