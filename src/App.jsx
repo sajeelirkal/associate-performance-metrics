@@ -205,7 +205,7 @@ function GitLabIcon({ size = 20 }) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [tab, setTab] = useState('github');
+  const [tab, setTab] = useState('home');
   const [backendUp,       setBackendUp]       = useState(null); // null=unchecked, true, false
   const [oauthAvailable, setOauthAvailable]   = useState(false); // backend has OAuth configured
 
@@ -1172,17 +1172,13 @@ export default function App() {
     <div className="app">
       {/* ── Header ── */}
       <header className="header">
-        <div className="header-logo">
-          {/* Team analytics logo — bar chart + people */}
+        <div className="header-logo" onClick={() => setTab('home')} style={{ cursor:'pointer' }}>
           <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-            {/* bar chart */}
             <rect x="3"  y="18" width="5" height="10" rx="1.5" fill="#58a6ff" opacity="0.9"/>
             <rect x="10" y="12" width="5" height="16" rx="1.5" fill="#3fb950" opacity="0.9"/>
             <rect x="17" y="7"  width="5" height="21" rx="1.5" fill="#d2a8ff" opacity="0.9"/>
             <rect x="24" y="14" width="5" height="14" rx="1.5" fill="#ffa657" opacity="0.9"/>
-            {/* upward trend line */}
             <polyline points="5.5,22 12.5,15 19.5,9 26.5,17" stroke="#58a6ff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.5"/>
-            {/* people dots on trend */}
             <circle cx="5.5"  cy="22" r="2" fill="#58a6ff"/>
             <circle cx="12.5" cy="15" r="2" fill="#3fb950"/>
             <circle cx="19.5" cy="9"  r="2" fill="#d2a8ff"/>
@@ -1195,6 +1191,7 @@ export default function App() {
             </div>
           </div>
         </div>
+        {tab !== 'home' && (
         <nav className="tab-nav">
           {[
             { id: 'github',      label: 'GitHub',      icon: <GitHubIcon size={15} /> },
@@ -1208,12 +1205,103 @@ export default function App() {
             </button>
           ))}
         </nav>
+        )}
       </header>
 
-      <main className="main">
+      <main className={tab === 'home' ? 'main main-home' : 'main'}>
+
+        {/* ══ Home Page ════════════════════════════════════════════════════ */}
+        {tab === 'home' && (
+          <div className="home-page">
+            <section className="hero">
+              <div className="hero-glow" />
+              <div className="hero-content">
+                <h1 className="hero-title">
+                  Team Performance<br />
+                  <span className="hero-accent">Metrics Dashboard</span>
+                </h1>
+                <p className="hero-subtitle">
+                  Unified visibility into your team's engineering activity across GitHub, GitLab, and Jira.
+                  Track commits, pull requests, code reviews, sprint health, and more — all in one place.
+                </p>
+                <div className="hero-actions">
+                  <button className="btn btn-primary btn-lg" onClick={() => switchTab('settings')}>
+                    Get Started
+                  </button>
+                  <button className="btn btn-outline btn-lg" onClick={handleLoadDemo}>
+                    View Demo
+                  </button>
+                </div>
+              </div>
+              <div className="hero-visual">
+                <svg width="320" height="220" viewBox="0 0 320 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <rect x="0" y="0" width="320" height="220" rx="12" fill="var(--surface)" stroke="var(--border)" strokeWidth="1"/>
+                  <rect x="20" y="160" width="36" height="40" rx="4" fill="#58a6ff" opacity="0.8"/>
+                  <rect x="68" y="120" width="36" height="80" rx="4" fill="#3fb950" opacity="0.8"/>
+                  <rect x="116" y="80" width="36" height="120" rx="4" fill="#d2a8ff" opacity="0.8"/>
+                  <rect x="164" y="100" width="36" height="100" rx="4" fill="#ffa657" opacity="0.8"/>
+                  <rect x="212" y="60" width="36" height="140" rx="4" fill="#58a6ff" opacity="0.6"/>
+                  <rect x="260" y="40" width="36" height="160" rx="4" fill="#3fb950" opacity="0.6"/>
+                  <polyline points="38,155 86,115 134,75 182,95 230,55 278,35" stroke="#58a6ff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.7"/>
+                  <circle cx="38" cy="155" r="4" fill="#58a6ff"/>
+                  <circle cx="86" cy="115" r="4" fill="#3fb950"/>
+                  <circle cx="134" cy="75" r="4" fill="#d2a8ff"/>
+                  <circle cx="182" cy="95" r="4" fill="#ffa657"/>
+                  <circle cx="230" cy="55" r="4" fill="#58a6ff" opacity="0.7"/>
+                  <circle cx="278" cy="35" r="4" fill="#3fb950" opacity="0.7"/>
+                  <text x="160" y="20" textAnchor="middle" fill="var(--text-muted)" fontSize="11" fontFamily="inherit">Team Activity Overview</text>
+                </svg>
+              </div>
+            </section>
+
+            <section className="features-grid">
+              {[
+                { icon: <GitHubIcon size={28} />, title: 'GitHub Analytics', desc: 'Commits, PRs, code reviews, churn rates, and cycle time analysis per contributor.', color: '#58a6ff', tab: 'github' },
+                { icon: <GitLabIcon size={28} />, title: 'GitLab Integration', desc: 'Merge requests, commit tracking, review notes, and activity breakdowns across projects.', color: '#FC6D26', tab: 'gitlab' },
+                { icon: <JiraIcon size={28} />, title: 'Jira Tracking', desc: 'Sprint health, issue lifecycle, story points, comments, and status transition history.', color: '#2684FF', tab: 'jira' },
+                { icon: <span style={{fontSize:28}}>📊</span>, title: 'Performance View', desc: 'Cross-platform comparisons with radar charts, engagement metrics, and team summaries.', color: '#d2a8ff', tab: 'performance' },
+              ].map(f => (
+                <div key={f.title} className="feature-card" onClick={() => switchTab(f.tab)}>
+                  <div className="feature-icon" style={{ color: f.color }}>{f.icon}</div>
+                  <h3 className="feature-title">{f.title}</h3>
+                  <p className="feature-desc">{f.desc}</p>
+                  <span className="feature-link" style={{ color: f.color }}>Explore →</span>
+                </div>
+              ))}
+            </section>
+
+            <section className="home-highlights">
+              <div className="highlight-card">
+                <div className="highlight-number" style={{ color:'var(--accent)' }}>3</div>
+                <div className="highlight-label">Platforms Unified</div>
+                <div className="highlight-sub">GitHub · GitLab · Jira</div>
+              </div>
+              <div className="highlight-card">
+                <div className="highlight-number" style={{ color:'var(--accent2)' }}>15+</div>
+                <div className="highlight-label">Metrics Tracked</div>
+                <div className="highlight-sub">Commits · PRs · Reviews · Sprint Health</div>
+              </div>
+              <div className="highlight-card">
+                <div className="highlight-number" style={{ color:'var(--accent4)' }}>Real-time</div>
+                <div className="highlight-label">Data Analysis</div>
+                <div className="highlight-sub">Live API integration with your tools</div>
+              </div>
+            </section>
+
+            <section className="home-cta">
+              <h2>Ready to get started?</h2>
+              <p>Configure your integrations in Settings, or try the demo to explore with sample data.</p>
+              <div className="hero-actions">
+                <button className="btn btn-primary btn-lg" onClick={() => switchTab('settings')}>
+                  Open Settings
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
 
         {/* ══ Demo mode banner ════════════════════════════════════════════ */}
-        {demoMode && tab !== 'settings' && (
+        {demoMode && tab !== 'settings' && tab !== 'home' && (
           <div style={{ background:'linear-gradient(90deg,#6e40c9,#d2a8ff)', color:'#fff', padding:'6px 20px', fontSize:12, display:'flex', alignItems:'center', gap:12 }}>
             <span>🎭 <strong>Demo Mode</strong> — synthetic data only, no real GitHub or Jira connections.</span>
             <button onClick={() => setTab('settings')} style={{ marginLeft:'auto', background:'rgba(255,255,255,0.2)', border:'1px solid rgba(255,255,255,0.4)', borderRadius:6, color:'#fff', padding:'2px 10px', cursor:'pointer', fontSize:12 }}>
@@ -1222,8 +1310,8 @@ export default function App() {
           </div>
         )}
 
-        {/* ══ Slim status bar (visible on all non-settings tabs) ════════════ */}
-        {tab !== 'settings' && (
+        {/* ══ Slim status bar (visible on all non-settings/home tabs) ════════ */}
+        {tab !== 'settings' && tab !== 'home' && (
           <div className="status-bar">
             <div className="status-bar-left">
               <span className="status-pill">
