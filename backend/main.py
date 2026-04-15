@@ -338,6 +338,7 @@ ISSUE_FIELDS_BASE = [
     "created", "updated", "resolutiondate",
     "customfield_10020",  # sprint
     "labels", "fixVersions", "components",
+    "comment",
 ]
 
 # Well-known custom field IDs for story points across Jira instances
