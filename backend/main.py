@@ -335,7 +335,7 @@ def _resolve_to_account_id(jira_url: str, token: str, email: Optional[str], valu
 
 ISSUE_FIELDS_BASE = [
     "summary", "status", "priority", "assignee", "issuetype",
-    "created", "updated", "resolutiondate",
+    "created", "updated", "resolution", "resolutiondate",
     "customfield_10020",  # sprint
     "labels", "fixVersions", "components",
     "comment",

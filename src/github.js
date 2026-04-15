@@ -185,13 +185,8 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
       }
     }
 
-    if (rateLimited) {
-      metrics[author] = { _rateLimited: true, prsOpened:0, prsMerged:0, prsReviewed:0, prsChurned:0, avgCycleTimeDays:null, churnPct:0, reviewComments:0 };
-      continue;
-    }
-
     // Throttle before next author's batch
-    if (ai < authors.length - 1) await sleep(SEARCH_DELAY_MS);
+    if (!rateLimited && ai < authors.length - 1) await sleep(SEARCH_DELAY_MS);
 
     const cycleTimes = mergedItems
       .filter(pr => pr.pull_request?.merged_at && pr.created_at)
@@ -210,6 +205,7 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
     }).length;
 
     metrics[author] = {
+      _rateLimited:    rateLimited,
       prsOpened:       openedItems.length,
       prsMerged:       mergedItems.length,
       prsReviewed:     reviewedItems.length,
