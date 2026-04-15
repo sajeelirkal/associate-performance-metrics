@@ -366,6 +366,7 @@ def _search_cloud(base_url: str, auth_headers: dict, jql: str, issue_fields: lis
             "jql": jql,
             "maxResults": 50,
             "fields": ",".join(fields_list),
+            "expand": "changelog",
         }
         if next_page_token:
             params["nextPageToken"] = next_page_token

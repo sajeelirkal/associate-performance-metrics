@@ -82,6 +82,9 @@ export async function fetchCommits(token, repoFullName, authors = [], since = nu
 
 // ── PR helpers ────────────────────────────────────────────────────────────────
 
+const SEARCH_DELAY_MS = 2200;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /** Search issues/PRs, returning up to maxItems results (max 1000 via GH search). */
 async function searchGitHub(headers, query, maxItems = 300) {
   const results = [];
@@ -89,12 +92,15 @@ async function searchGitHub(headers, query, maxItems = 300) {
   while (results.length < maxItems) {
     const url = `${BASE_URL}/search/issues?q=${encodeURIComponent(query)}&per_page=100&page=${page}`;
     const res = await fetch(url, { headers });
-    if (res.status === 422) break;
+    if (res.status === 422) {
+      console.warn(`[PR] GitHub Search 422 for query: ${query}`);
+      break;
+    }
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
       if (res.status === 403 || res.status === 429) {
         throw new Error('rate limit exceeded — connect GitHub to increase quota');
       }
+      console.warn(`[PR] GitHub Search ${res.status} for query: ${query}`);
       break;
     }
     const data = await res.json();
@@ -146,7 +152,8 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
   const metrics = {};
   let rateLimited = false;
 
-  for (const author of authors) {
+  for (let ai = 0; ai < authors.length; ai++) {
+    const author = authors[ai];
     if (rateLimited) {
       metrics[author] = { _rateLimited: true, prsOpened:0, prsMerged:0, prsReviewed:0, prsChurned:0, avgCycleTimeDays:null, churnPct:0, reviewComments:0 };
       continue;
@@ -154,14 +161,37 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
 
     let openedItems = [], mergedItems = [], reviewedItems = [];
 
-    try { openedItems   = await searchGitHub(headers, `${repo} is:pr author:${author}${createdRange}`); }
-    catch (e) { if (String(e).includes('rate limit')) { rateLimited = true; } }
+    try { openedItems = await searchGitHub(headers, `${repo} is:pr author:${author}${createdRange}`); }
+    catch (e) {
+      if (String(e).includes('rate limit')) { rateLimited = true; }
+      else { console.warn(`[PR] opened search failed for ${author}:`, e.message); }
+    }
 
-    try { mergedItems   = await searchGitHub(headers, `${repo} is:pr is:merged author:${author}${mergedRange}`); }
-    catch (e) { if (String(e).includes('rate limit')) { rateLimited = true; } }
+    if (!rateLimited) {
+      await sleep(SEARCH_DELAY_MS);
+      try { mergedItems = await searchGitHub(headers, `${repo} is:pr is:merged author:${author}${mergedRange}`); }
+      catch (e) {
+        if (String(e).includes('rate limit')) { rateLimited = true; }
+        else { console.warn(`[PR] merged search failed for ${author}:`, e.message); }
+      }
+    }
 
-    try { reviewedItems = await searchGitHub(headers, `${repo} is:pr reviewed-by:${author}${createdRange}`); }
-    catch (e) { if (String(e).includes('rate limit')) { rateLimited = true; } }
+    if (!rateLimited) {
+      await sleep(SEARCH_DELAY_MS);
+      try { reviewedItems = await searchGitHub(headers, `${repo} is:pr reviewed-by:${author}${createdRange}`); }
+      catch (e) {
+        if (String(e).includes('rate limit')) { rateLimited = true; }
+        else { console.warn(`[PR] reviewed search failed for ${author}:`, e.message); }
+      }
+    }
+
+    if (rateLimited) {
+      metrics[author] = { _rateLimited: true, prsOpened:0, prsMerged:0, prsReviewed:0, prsChurned:0, avgCycleTimeDays:null, churnPct:0, reviewComments:0 };
+      continue;
+    }
+
+    // Throttle before next author's batch
+    if (ai < authors.length - 1) await sleep(SEARCH_DELAY_MS);
 
     const cycleTimes = mergedItems
       .filter(pr => pr.pull_request?.merged_at && pr.created_at)
