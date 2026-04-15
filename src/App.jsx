@@ -117,6 +117,10 @@ function InfoTip({ text }) {
   );
 }
 
+const ACTIVE_DAYS_TIP =
+  'Number of unique calendar days with at least one commit. ' +
+  'Does not include PR reviews, comments, or other activity — only committed code.';
+
 const PR_CHURN_TIP =
   'PR Churn = % of your opened PRs that received review comments from someone else. ' +
   'A high % means your PRs frequently required revision cycles before being accepted. ' +
@@ -483,8 +487,60 @@ export default function App() {
           : contribs.slice(0, 20)
       );
       setCommits(rawCommits.sort((a, b) => new Date(b.date) - new Date(a.date)));
-      setPrMetrics(prMeta);
-      if (prMeta._rateLimited) {
+
+      // Resolve actual GitHub logins from commit data: the Commits API
+      // matches by login/email/name, but PR Search only accepts logins.
+      // If commits came back under a different login than what the user
+      // entered, re-fetch PR metrics using the resolved login.
+      const loginMap = new Map();
+      for (const assoc of associateList) {
+        const myCommits = rawCommits.filter(c =>
+          c.author?.toLowerCase() === assoc.toLowerCase()
+        );
+        if (myCommits.length > 0) {
+          loginMap.set(assoc.toLowerCase(), myCommits[0].author);
+          continue;
+        }
+        const byContrib = contribs.find(c => c.login.toLowerCase() === assoc.toLowerCase());
+        if (byContrib) {
+          loginMap.set(assoc.toLowerCase(), byContrib.login);
+        }
+      }
+
+      const needsRefetch = [];
+      for (const assoc of associateList) {
+        const resolved = loginMap.get(assoc.toLowerCase());
+        const entry = prMeta[assoc] || prMeta[assoc.toLowerCase()];
+        const hasZeroPRs = entry && entry.prsOpened === 0 && entry.prsMerged === 0 && entry.prsReviewed === 0;
+        if (resolved && resolved.toLowerCase() !== assoc.toLowerCase() && (hasZeroPRs || !entry)) {
+          needsRefetch.push({ original: assoc, resolved });
+        }
+      }
+
+      let mergedPr = { ...prMeta };
+      if (needsRefetch.length > 0 && !prMeta._rateLimited) {
+        const resolvedLogins = needsRefetch.map(r => r.resolved);
+        try {
+          const retried = await fetchPRMetrics(token, ghRepo, resolvedLogins, since, until);
+          for (const { original, resolved } of needsRefetch) {
+            if (retried[resolved] || retried[resolved.toLowerCase()]) {
+              mergedPr[original] = retried[resolved] || retried[resolved.toLowerCase()];
+            }
+          }
+          if (retried._rateLimited) mergedPr._rateLimited = true;
+        } catch { /* non-fatal retry */ }
+      }
+
+      const normalizedPr = {};
+      for (const [k, v] of Object.entries(mergedPr)) {
+        const nk = k === '_rateLimited' ? k : k.toLowerCase();
+        const existing = normalizedPr[nk];
+        if (!existing || existing._rateLimited || (v && !v._rateLimited && (v.prsOpened || v.prsMerged || v.prsReviewed))) {
+          normalizedPr[nk] = v;
+        }
+      }
+      setPrMetrics(normalizedPr);
+      if (mergedPr._rateLimited) {
         setPrFetchNote('⚠ GitHub search rate limit reached — PR data may be incomplete. Connect via OAuth or wait a minute and re-fetch.');
       } else if (!token) {
         setPrFetchNote('ℹ No GitHub token — unauthenticated requests have a very low rate limit (10/min). Connect GitHub for full PR data.');
@@ -717,20 +773,21 @@ export default function App() {
       if (glName) tokens.add(glName);
       if (ghName) tokens.add(ghName);
 
-      // Seed with Jira display name and its individual words so that
-      // "Sajeel Irkal" (Jira) matches "Sajeel Irkal" (GitLab author)
+      // Seed with full Jira display name (not individual words — those
+      // cause cross-contamination when two people share a first/last name).
       const cleanJiraName = cleanDisplayName(jiraDisplay);
       if (cleanJiraName) {
         tokens.add(cleanJiraName.toLowerCase());
-        cleanJiraName.toLowerCase().split(/\s+/).forEach(w => { if (w.length > 1) tokens.add(w); });
       }
 
-      // Seed with Jira username if it looks human-readable
       if (jira && !looksLikeId(jira)) tokens.add(jira.toLowerCase());
 
       // Scan commits to learn author names and emails for this person.
-      // Also try substring matching: if any seed token is contained within
-      // the commit email prefix or author name, consider it a match.
+      // Use exact token matches + word-overlap on the full display name.
+      const jiraNameWords = cleanJiraName
+        ? cleanJiraName.toLowerCase().split(/\s+/).filter(w => w.length > 1)
+        : [];
+
       for (const c of glCommits) {
         const cAuthor = (c.author || '').toLowerCase();
         const cEmail  = (c.authorEmail || '').toLowerCase();
@@ -738,32 +795,21 @@ export default function App() {
 
         const directMatch = tokens.has(cAuthor) || tokens.has(cEmail) || (cPrefix && tokens.has(cPrefix));
 
-        // Substring: check if any token appears inside the author or email prefix, or vice versa
-        let substringMatch = false;
-        if (!directMatch) {
-          for (const t of tokens) {
-            if (t.length < 2) continue;
-            if ((cAuthor && (cAuthor.includes(t) || t.includes(cAuthor))) ||
-                (cPrefix && cPrefix.length > 1 && (cPrefix.includes(t) || t.includes(cPrefix)))) {
-              substringMatch = true;
-              break;
-            }
-          }
-        }
-
-        // Also check if the commit author name words match the Jira display name words
-        if (!directMatch && !substringMatch && cleanJiraName) {
+        // Word-overlap: require at least 2 overlapping words between the
+        // commit author name and the Jira display name to avoid false
+        // positives on shared first or last names alone.
+        let wordMatch = false;
+        if (!directMatch && jiraNameWords.length >= 2) {
           const authorWords = cAuthor.split(/\s+/).filter(w => w.length > 1);
-          const nameWords = cleanJiraName.toLowerCase().split(/\s+/).filter(w => w.length > 1);
-          if (nameWords.length > 0 && authorWords.length > 0) {
-            const overlap = nameWords.filter(w => authorWords.includes(w));
-            if (overlap.length >= Math.min(nameWords.length, authorWords.length)) {
-              substringMatch = true;
+          if (authorWords.length >= 2) {
+            const overlap = jiraNameWords.filter(w => authorWords.includes(w));
+            if (overlap.length >= 2 && overlap.length >= Math.min(jiraNameWords.length, authorWords.length)) {
+              wordMatch = true;
             }
           }
         }
 
-        if (directMatch || substringMatch) {
+        if (directMatch || wordMatch) {
           if (cAuthor) tokens.add(cAuthor);
           if (cEmail)  tokens.add(cEmail);
           if (cPrefix) tokens.add(cPrefix);
@@ -1074,13 +1120,15 @@ export default function App() {
   }, [userMapping, associateList, commits, jiraIssues, issueMatchesAssignee]);
 
   // radarShaped: metric-centric rows, one column per person — works for 1 or N people
+  // Normalization baseline is always the full team so a single-user view
+  // still shows that person's metrics relative to the team's top performer.
   const radarShaped = useMemo(() => {
-    const src = activeAssociate ? perfData.filter(p => p.github === activeAssociate) : perfData;
+    const src = activeAssociate ? perfData.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase()) : perfData;
     if (!src.length) return [];
-    const maxCommits    = Math.max(...src.map(p => p.commits),    1);
-    const maxDone       = Math.max(...src.map(p => p.issuesDone), 1);
-    const maxActiveDays = Math.max(...src.map(p => p.activeDays), 1);
-    const maxSP         = Math.max(...src.map(p => p.totalSP),    1);
+    const maxCommits    = Math.max(...perfData.map(p => p.commits),    1);
+    const maxDone       = Math.max(...perfData.map(p => p.issuesDone), 1);
+    const maxActiveDays = Math.max(...perfData.map(p => p.activeDays), 1);
+    const maxSP         = Math.max(...perfData.map(p => p.totalSP),    1);
     const normed = src.map(p => ({
       name:           p.github,
       'Commit Volume': Math.round((p.commits    / maxCommits)    * 100),
@@ -1688,12 +1736,14 @@ export default function App() {
                           className={`chip chip-all ${!activeAssociate && selectedAuthors.length === 0 ? 'active' : ''}`}
                           onClick={() => { setActiveAssociate(null); setSelectedAuthors([]); setGhPage(1); }}
                         >All</button>
-                        {contributors.map((c, i) => (
+                        {contributors.map((c, i) => {
+                          const normalized = associateList.find(a => a.toLowerCase() === c.login.toLowerCase()) || c.login;
+                          return (
                           <button
                             key={c.login}
-                            className={`chip ${activeAssociate === c.login || (!activeAssociate && selectedAuthors.includes(c.login)) ? 'active' : ''}`}
+                            className={`chip ${activeAssociate?.toLowerCase() === c.login.toLowerCase() || (!activeAssociate && selectedAuthors.includes(c.login)) ? 'active' : ''}`}
                             onClick={() => {
-                              setActiveAssociate(prev => prev === c.login ? null : c.login);
+                              setActiveAssociate(prev => prev?.toLowerCase() === normalized.toLowerCase() ? null : normalized);
                               setSelectedAuthors([]);
                               setGhPage(1);
                             }}
@@ -1701,7 +1751,8 @@ export default function App() {
                             {c.avatarUrl && <img src={c.avatarUrl} alt="" />}
                             {ghDisplayName(c.login)}
                           </button>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -1712,11 +1763,11 @@ export default function App() {
                   {[
                     { label:'Total Commits', value: ghStats.total.toLocaleString(), sub:'in selected range', color:'var(--accent)' },
                     { label:'Contributors',  value: ghStats.uniqueAuthors, sub:'active authors', color:'var(--accent2)' },
-                    { label:'Active Days',   value: ghStats.activeDays,    sub:'days with commits', color:'var(--accent4)' },
+                    { label:'Active Days',   value: ghStats.activeDays,    sub:'days with commits', color:'var(--accent4)', tip: ACTIVE_DAYS_TIP },
                     { label:'Avg / Day',     value: ghStats.avgPerDay,     sub:'commits per active day', color:'var(--accent5)' },
                   ].map(s => (
                     <div key={s.label} className="stat-card">
-                      <div className="label">{s.label}</div>
+                      <div className="label">{s.label}{s.tip && <InfoTip text={s.tip} />}</div>
                       <div className="value" style={{ color: s.color }}>{s.value}</div>
                       <div className="sub">{s.sub}</div>
                     </div>
@@ -1832,7 +1883,7 @@ export default function App() {
                   const prRows = (activeAssociate
                     ? [activeAssociate]
                     : associateList
-                  ).map((login, i) => ({ login, displayName: ghDisplayName(login), ...prMetrics[login] ?? {}, colorIdx: i }))
+                  ).map((login, i) => ({ login, displayName: ghDisplayName(login), ...prMetrics[login?.toLowerCase()] ?? {}, colorIdx: i }))
                    .filter(r => r.prsOpened != null);
                   if (!prRows.length) return null;
                   const totalPRs = prRows.reduce((s,r) => s + (r.prsOpened ?? 0), 0);
@@ -2010,9 +2061,9 @@ export default function App() {
                           return (
                             <button
                               key={c.login}
-                              className={`chip ${activeAssociate && glCommitMatchesAssociate({ author: c.login, authorEmail: '' }, activeAssociate) ? 'active' : ''}`}
+                              className={`chip ${activeAssociate?.toLowerCase() === ghLogin?.toLowerCase() ? 'active' : ''}`}
                               onClick={() => {
-                                setActiveAssociate(prev => prev === ghLogin ? null : ghLogin);
+                                setActiveAssociate(prev => prev?.toLowerCase() === ghLogin?.toLowerCase() ? null : ghLogin);
                                 setGlPage(1);
                               }}
                             >
@@ -2030,11 +2081,11 @@ export default function App() {
                   {[
                     { label:'Total Commits', value: glStats.total.toLocaleString(), sub:'in selected range', color:'#FC6D26' },
                     { label:'Contributors',  value: glStats.uniqueAuthors, sub:'active authors', color:'var(--accent2)' },
-                    { label:'Active Days',   value: glStats.activeDays,    sub:'days with commits', color:'var(--accent4)' },
+                    { label:'Active Days',   value: glStats.activeDays,    sub:'days with commits', color:'var(--accent4)', tip: ACTIVE_DAYS_TIP },
                     { label:'Avg / Day',     value: glStats.avgPerDay,     sub:'commits per active day', color:'var(--accent5)' },
                   ].map(s => (
                     <div key={s.label} className="stat-card">
-                      <div className="label">{s.label}</div>
+                      <div className="label">{s.label}{s.tip && <InfoTip text={s.tip} />}</div>
                       <div className="value" style={{ color: s.color }}>{s.value}</div>
                       <div className="sub">{s.sub}</div>
                     </div>
@@ -2287,9 +2338,9 @@ export default function App() {
                           {associateOptions.map((opt, i) => (
                             <button
                               key={opt.github}
-                              className={`chip ${activeAssociate === opt.github ? 'active' : ''}`}
-                              style={{ borderColor: activeAssociate === opt.github ? COLORS[i % COLORS.length] : undefined }}
-                              onClick={() => { setActiveAssociate(prev => prev === opt.github ? null : opt.github); setJiraPage(1); }}
+                              className={`chip ${activeAssociate?.toLowerCase() === opt.github?.toLowerCase() ? 'active' : ''}`}
+                              style={{ borderColor: activeAssociate?.toLowerCase() === opt.github?.toLowerCase() ? COLORS[i % COLORS.length] : undefined }}
+                              onClick={() => { setActiveAssociate(prev => prev?.toLowerCase() === opt.github?.toLowerCase() ? null : opt.github); setJiraPage(1); }}
                             >
                               {ghDisplayName(opt.github)}
                             </button>
@@ -2585,9 +2636,9 @@ export default function App() {
                       {perfData.map((p, i) => (
                         <button
                           key={p.github}
-                          className={`chip ${activeAssociate === p.github ? 'active' : ''}`}
-                          style={{ borderColor: activeAssociate === p.github ? COLORS[i % COLORS.length] : undefined }}
-                          onClick={() => setActiveAssociate(prev => prev === p.github ? null : p.github)}
+                          className={`chip ${activeAssociate?.toLowerCase() === p.github?.toLowerCase() ? 'active' : ''}`}
+                          style={{ borderColor: activeAssociate?.toLowerCase() === p.github?.toLowerCase() ? COLORS[i % COLORS.length] : undefined }}
+                          onClick={() => setActiveAssociate(prev => prev?.toLowerCase() === p.github?.toLowerCase() ? null : p.github)}
                         >
                           {p.displayName}
                         </button>
@@ -2603,30 +2654,31 @@ export default function App() {
 
                 {/* Per-person stat cards */}
                 <div style={{ display:'flex', flexWrap:'wrap', gap:12, marginBottom:24 }}>
-                  {perfData.filter(p => !activeAssociate || p.github === activeAssociate).map((p, i) => (
-                    <div key={p.github} className={`perf-card ${activeAssociate === p.github ? 'perf-card-focused' : ''}`} style={{ borderColor: COLORS[perfData.indexOf(p) % COLORS.length] }}>
+                  {perfData.filter(p => !activeAssociate || p.github?.toLowerCase() === activeAssociate.toLowerCase()).map((p, i) => {
+                    const pr = prMetrics[p.github?.toLowerCase()];
+                    return (
+                    <div key={p.github} className={`perf-card ${activeAssociate?.toLowerCase() === p.github?.toLowerCase() ? 'perf-card-focused' : ''}`} style={{ borderColor: COLORS[perfData.indexOf(p) % COLORS.length] }}>
                       <div className="perf-name" style={{ color: COLORS[i % COLORS.length] }}>{p.displayName}</div>
                       {p.displayName !== p.github && <div className="perf-sub">{p.github} (GitHub)</div>}
                       <div className="perf-metrics">
                         <div className="perf-metric"><span>GH Commits</span><strong>{p.commits}</strong></div>
-                        <div className="perf-metric"><span>GH Active Days</span><strong>{p.activeDays}</strong></div>
+                        <div className="perf-metric"><span>GH Active Days <InfoTip text={ACTIVE_DAYS_TIP} /></span><strong>{p.activeDays}</strong></div>
                         {p.glCommits > 0 && <>
                           <div className="perf-metric"><span>GL Commits</span><strong style={{ color:'#FC6D26' }}>{p.glCommits}</strong></div>
-                          <div className="perf-metric"><span>GL Active Days</span><strong style={{ color:'#FC6D26' }}>{p.glActiveDays}</strong></div>
+                          <div className="perf-metric"><span>GL Active Days <InfoTip text={ACTIVE_DAYS_TIP} /></span><strong style={{ color:'#FC6D26' }}>{p.glActiveDays}</strong></div>
                         </>}
                         <div className="perf-metric"><span>Issues Done</span><strong style={{ color:'var(--accent2)' }}>{p.issuesDone}</strong></div>
                         <div className="perf-metric"><span>Issues Open</span><strong style={{ color:'var(--accent5)' }}>{p.issuesOpen}</strong></div>
                         <div className="perf-metric"><span>Avg Cycle</span><strong>{p.avgCycleTime !== null ? `${p.avgCycleTime}d` : '—'}</strong></div>
                         <div className="perf-metric"><span>Spillovers</span><strong style={{ color: p.totalSpillovers>0?'var(--danger)':'var(--accent2)' }}>{p.totalSpillovers}</strong></div>
                         <div className="perf-metric"><span>Story Pts</span><strong style={{ color:'var(--accent4)' }}>{p.totalSP || '—'}</strong></div>
-                        {/* PR metrics */}
-                        {prMetrics[p.github] && <>
+                        {pr && <>
                           <div className="perf-metric" style={{ borderTop:'1px solid var(--border)', gridColumn:'1/-1', paddingTop:4, marginTop:2 }}/>
-                          <div className="perf-metric"><span>GH PRs Merged</span><strong style={{ color:'var(--accent)' }}>{prMetrics[p.github].prsMerged ?? '—'}</strong></div>
-                          <div className="perf-metric"><span>GH Reviews Given</span><strong style={{ color:'var(--accent4)' }}>{prMetrics[p.github].prsReviewed ?? '—'}</strong></div>
-                          <div className="perf-metric"><span>GH Review Comments</span><strong style={{ color:'#d2a8ff' }}>{prMetrics[p.github].reviewComments ?? '—'}</strong></div>
-                          <div className="perf-metric"><span>GH PR Cycle Time</span><strong>{prMetrics[p.github].avgCycleTimeDays != null ? `${prMetrics[p.github].avgCycleTimeDays}d` : '—'}</strong></div>
-                          <div className="perf-metric"><span>PR Churn <InfoTip text={PR_CHURN_TIP} /></span><strong style={{ color: (prMetrics[p.github].churnPct??0)>60?'var(--danger)':'inherit' }}>{prMetrics[p.github].churnPct != null ? `${prMetrics[p.github].churnPct}%` : '—'}</strong></div>
+                          <div className="perf-metric"><span>GH PRs Merged</span><strong style={{ color:'var(--accent)' }}>{pr.prsMerged ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH Reviews Given</span><strong style={{ color:'var(--accent4)' }}>{pr.prsReviewed ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH Review Comments</span><strong style={{ color:'#d2a8ff' }}>{pr.reviewComments ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH PR Cycle Time</span><strong>{pr.avgCycleTimeDays != null ? `${pr.avgCycleTimeDays}d` : '—'}</strong></div>
+                          <div className="perf-metric"><span>PR Churn <InfoTip text={PR_CHURN_TIP} /></span><strong style={{ color: (pr.churnPct??0)>60?'var(--danger)':'inherit' }}>{pr.churnPct != null ? `${pr.churnPct}%` : '—'}</strong></div>
                         </>}
                         {/* GL MR metrics */}
                         {p.glMRsOpened > 0 && <>
@@ -2638,13 +2690,14 @@ export default function App() {
                         <div className="perf-metric"><span>Last Commit</span><strong style={{ fontSize:11 }}>{p.lastCommit ? fmtDate(p.lastCommit) : '—'}</strong></div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Charts — filtered to selected associate when in 1:1 mode */}
                 {(() => {
                   const chartPerf = activeAssociate
-                    ? perfData.filter(p => p.github === activeAssociate)
+                    ? perfData.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase())
                     : perfData;
                   return (
                 <div className="charts-grid">
@@ -2654,7 +2707,7 @@ export default function App() {
                     <ResponsiveContainer width="100%" height={260}>
                       <BarChart data={chartPerf} margin={{ top:0, right:16, left:-20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                        <XAxis dataKey="github" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                        <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                         <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                         <Tooltip content={<ChartTooltip />} />
                         <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
@@ -2670,7 +2723,7 @@ export default function App() {
                     <ResponsiveContainer width="100%" height={260}>
                       <BarChart data={chartPerf} margin={{ top:0, right:16, left:-20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                        <XAxis dataKey="github" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                        <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                         <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                         <Tooltip content={<ChartTooltip />} />
                         <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
@@ -2698,16 +2751,16 @@ export default function App() {
                           <PolarGrid stroke="#30363d" />
                           <PolarAngleAxis dataKey="subject" tick={{ fill:'#8b949e', fontSize:12 }} />
                           {(activeAssociate
-                            ? perfData.filter(p => p.github === activeAssociate)
+                            ? perfData.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase())
                             : perfData
                           ).map((p, i) => (
-                            <Radar key={p.github} name={p.github} dataKey={p.github}
+                            <Radar key={p.github} name={p.displayName || p.github} dataKey={p.github}
                               stroke={COLORS[i % COLORS.length]} fill={COLORS[i % COLORS.length]} fillOpacity={0.25} />
                           ))}
                           <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
                           <Tooltip
                             contentStyle={{ background:'#21262d', border:'1px solid #30363d', borderRadius:8, fontSize:12, color:'#e6edf3' }}
-                            formatter={(v) => [`${v}`, undefined]}
+                            formatter={(v, name) => [`${v}`, name]}
                           />
                         </RadarChart>
                       </ResponsiveContainer>
@@ -2721,7 +2774,7 @@ export default function App() {
                       <ResponsiveContainer width="100%" height={260}>
                         <BarChart data={chartPerf} margin={{ top:0, right:16, left:-20, bottom:0 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                          <XAxis dataKey="github" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                          <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                           <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                           <Tooltip content={<ChartTooltip />} />
                           <Bar dataKey="totalSP" name="Story Points" radius={[4,4,0,0]}>
@@ -2746,7 +2799,7 @@ export default function App() {
                           <th>Associate</th>
                           <th>GH Commits</th>
                           <th>GL Commits</th>
-                          <th>Active Days</th>
+                          <th>Active Days <InfoTip text={ACTIVE_DAYS_TIP} /></th>
                           <th>Issues Done</th>
                           <th>Issues Open</th>
                           <th>Avg Cycle (d)</th>
@@ -2760,7 +2813,9 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {(activeAssociate ? perfData.filter(p => p.github === activeAssociate) : perfData).map((p, i) => (
+                        {(activeAssociate ? perfData.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase()) : perfData).map((p, i) => {
+                          const pr = prMetrics[p.github?.toLowerCase()];
+                          return (
                           <tr key={p.github}>
                             <td>
                               <div style={{ display:'flex', flexDirection:'column' }}>
@@ -2780,17 +2835,18 @@ export default function App() {
                               </span>
                             </td>
                             <td style={{ color:'var(--accent4)', fontWeight:600 }}>{p.totalSP ?? '—'}</td>
-                            <td style={{ color:'var(--accent)', fontWeight:600 }}>{prMetrics[p.github]?.prsMerged ?? '—'}</td>
+                            <td style={{ color:'var(--accent)', fontWeight:600 }}>{pr?.prsMerged ?? '—'}</td>
                             <td style={{ color:'#FC6D26', fontWeight:600 }}>{p.glMRsMerged ?? '—'}</td>
-                            <td style={{ color:'var(--accent4)', fontWeight:600 }}>{(prMetrics[p.github]?.prsReviewed ?? 0) + (p.glMRsReviewed ?? 0)}</td>
+                            <td style={{ color:'var(--accent4)', fontWeight:600 }}>{(pr?.prsReviewed ?? 0) + (p.glMRsReviewed ?? 0)}</td>
                             <td>
-                              {prMetrics[p.github]?.churnPct != null
-                                ? <span style={{ color:(prMetrics[p.github].churnPct>60)?'var(--danger)':'inherit', fontWeight:600 }}>{prMetrics[p.github].churnPct}%</span>
+                              {pr?.churnPct != null
+                                ? <span style={{ color:(pr.churnPct>60)?'var(--danger)':'inherit', fontWeight:600 }}>{pr.churnPct}%</span>
                                 : '—'}
                             </td>
                             <td className="commit-date">{p.lastCommit ? fmtDate(p.lastCommit) : '—'}</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -2825,7 +2881,7 @@ export default function App() {
                     {workSummaryOpen && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
                       {(activeAssociate
-                        ? workSummary.filter(p => p.github === activeAssociate)
+                        ? workSummary.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase())
                         : workSummary
                       ).map((p, personIdx) => {
                         const color = COLORS[perfData.findIndex(d => d.github === p.github) % COLORS.length] || COLORS[personIdx % COLORS.length];
@@ -2852,9 +2908,9 @@ export default function App() {
                               }}
                             >
                               <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'inline-block', transform: isCollapsed ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform .2s' }}>▶</span>
-                              <span style={{ fontWeight: 700, fontSize: 14, color }}>{p.github}</span>
+                              <span style={{ fontWeight: 700, fontSize: 14, color }}>{p.displayName}</span>
                               {p.displayName !== p.github && (
-                                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.displayName}</span>
+                                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.github}</span>
                               )}
                               <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
                                 {doneIssues.length} done · {openIssues.length} open · {p.commitItems.length} commit{p.commitItems.length !== 1 ? 's' : ''}
