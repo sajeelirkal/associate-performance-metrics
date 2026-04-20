@@ -285,6 +285,7 @@ export default function App() {
   const [ghLoading,    setGhLoading]    = useState(false);
   const [ghError,      setGhError]      = useState(null);
   const [ghFetched,    setGhFetched]    = useState(false);
+  const [ghOAuthSuccess, setGhOAuthSuccess] = useState(false);
   const [selectedAuthors, setSelectedAuthors] = useState([]);
   const [hoveredDay,   setHoveredDay]   = useState(null);
   const [searchMsg,    setSearchMsg]    = useState('');
@@ -333,14 +334,17 @@ export default function App() {
       if (t) {
         setToken(t);
         localStorage.setItem('gh_token', t);
+        setGhOAuthSuccess(true);
+        setTab('settings');
+        setTimeout(() => setGhOAuthSuccess(false), 5000);
       }
-      // Clean the token out of the URL so it's not visible / replayable
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
     }
     const params = new URLSearchParams(window.location.search);
     const ghErr = params.get('github_error');
     if (ghErr) {
       setGhError(`GitHub OAuth failed: ${ghErr}`);
+      setTab('settings');
       params.delete('github_error');
       const newSearch = params.toString();
       window.history.replaceState(null, '', window.location.pathname + (newSearch ? '?' + newSearch : ''));
@@ -1531,6 +1535,11 @@ export default function App() {
             {/* ── GitHub ── */}
             <section className="settings-section">
               <h2 className="settings-section-title"><GitHubIcon size={16}/> GitHub</h2>
+              {ghOAuthSuccess && (
+                <div className="alert alert-info" style={{ marginBottom:12, display:'flex', alignItems:'center', gap:8 }}>
+                  ✓ Successfully connected with GitHub!
+                </div>
+              )}
               <div className="settings-grid">
                 <div className="field">
                   <label>GitHub Authentication</label>
