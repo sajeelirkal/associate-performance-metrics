@@ -177,16 +177,20 @@ def github_callback(code: str = Query(...), error: Optional[str] = Query(None)):
         raise HTTPException(status_code=503, detail="GITHUB_CLIENT_SECRET not set.")
 
     log.info("Exchanging OAuth code for token")
-    resp = _SESSION.post(
-        "https://github.com/login/oauth/access_token",
-        json={
-            "client_id":     GH_CLIENT_ID,
-            "client_secret": GH_CLIENT_SECRET,
-            "code":          code,
-        },
-        headers={"Accept": "application/json"},
-        timeout=15,
-    )
+    try:
+        resp = _SESSION.post(
+            "https://github.com/login/oauth/access_token",
+            json={
+                "client_id":     GH_CLIENT_ID,
+                "client_secret": GH_CLIENT_SECRET,
+                "code":          code,
+            },
+            headers={"Accept": "application/json"},
+            timeout=15,
+        )
+    except requests.exceptions.ConnectionError as exc:
+        log.error("Cannot reach github.com for token exchange: %s", exc)
+        return RedirectResponse(url=f"{FRONTEND_ORIGIN}/?github_error=connection_failed")
 
     if not resp.ok:
         log.error("Token exchange failed: %s %s", resp.status_code, resp.text)
