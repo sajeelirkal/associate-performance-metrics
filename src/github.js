@@ -112,10 +112,35 @@ async function searchGitHub(headers, query, maxItems = 300) {
   return results;
 }
 
+async function fetchPRDetails(headers, owner, name, prNumbers) {
+  const results = [];
+  const BATCH = 6;
+  for (let i = 0; i < prNumbers.length; i += BATCH) {
+    if (i > 0) await sleep(SEARCH_DELAY_MS);
+    const batch = prNumbers.slice(i, i + BATCH);
+    let hitRateLimit = false;
+    const settled = await Promise.allSettled(
+      batch.map(num =>
+        fetch(`${BASE_URL}/repos/${owner}/${name}/pulls/${num}`, { headers })
+          .then(r => {
+            if (r.status === 403 || r.status === 429) { hitRateLimit = true; return null; }
+            return r.ok ? r.json() : null;
+          })
+      )
+    );
+    for (const r of settled) {
+      if (r.status === 'fulfilled' && r.value) results.push(r.value);
+    }
+    if (hitRateLimit) break;
+  }
+  return results;
+}
+
 /**
  * Fetch per-author PR statistics using the GitHub Search API.
  * Returns a map: { [login]: { prsOpened, prsMerged, prsReviewed, prsChurned,
- *                             avgCycleTimeDays, churnPct, reviewComments } }
+ *                             avgCycleTimeDays, churnPct, reviewComments,
+ *                             avgLinesChanged, avgFilesChanged } }
  */
 export async function fetchPRMetrics(token, repoFullName, authors = [], since = null, until = null) {
   if (!authors.length) return {};
@@ -149,13 +174,30 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
     }
   }
 
+  const mapItem = (pr, detailMap) => {
+    const detail = detailMap.get(pr.number);
+    return {
+      number: pr.number,
+      title: pr.title,
+      url: pr.html_url,
+      state: pr.pull_request?.merged_at ? 'merged' : pr.state,
+      author: pr.user?.login ?? '',
+      createdAt: pr.created_at,
+      mergedAt: pr.pull_request?.merged_at ?? null,
+      closedAt: pr.closed_at ?? null,
+      additions: detail?.additions ?? null,
+      deletions: detail?.deletions ?? null,
+      changedFiles: detail?.changed_files ?? null,
+    };
+  };
+
   const metrics = {};
   let rateLimited = false;
 
   for (let ai = 0; ai < authors.length; ai++) {
     const author = authors[ai];
     if (rateLimited) {
-      metrics[author] = { _rateLimited: true, prsOpened:0, prsMerged:0, prsReviewed:0, prsChurned:0, avgCycleTimeDays:null, churnPct:0, reviewComments:0 };
+      metrics[author] = { _rateLimited: true, prsOpened:0, prsMerged:0, prsReviewed:0, prsChurned:0, avgCycleTimeDays:null, churnPct:0, reviewComments:0, avgLinesChanged:null, avgFilesChanged:null, authoredPRs:[], reviewedPRs:[] };
       continue;
     }
 
@@ -185,6 +227,20 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
       }
     }
 
+    // Fetch PR detail for complexity metrics and per-PR additions/deletions/files
+    let prDetails = [];
+    if (!rateLimited) {
+      const allPRNumbers = [...new Set([
+        ...openedItems.map(pr => pr.number),
+        ...reviewedItems.map(pr => pr.number),
+      ])];
+      if (allPRNumbers.length > 0) {
+        try {
+          prDetails = await fetchPRDetails(headers, owner, name, allPRNumbers);
+        } catch { /* non-fatal */ }
+      }
+    }
+
     // Throttle before next author's batch
     if (!rateLimited && ai < authors.length - 1) await sleep(SEARCH_DELAY_MS);
 
@@ -204,6 +260,12 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
       return false;
     }).length;
 
+    const detailMap = new Map(prDetails.map(d => [d.number, d]));
+    const mergedNumbers = new Set(mergedItems.map(pr => pr.number));
+    const mergedDetails = prDetails.filter(d => mergedNumbers.has(d.number));
+    const linesArr = mergedDetails.map(d => (d.additions ?? 0) + (d.deletions ?? 0));
+    const filesArr = mergedDetails.map(d => d.changed_files ?? 0);
+
     metrics[author] = {
       _rateLimited:    rateLimited,
       prsOpened:       openedItems.length,
@@ -217,6 +279,14 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
         ? Math.round((prsChurned / openedItems.length) * 100)
         : 0,
       reviewComments,
+      avgLinesChanged: linesArr.length
+        ? Math.round(linesArr.reduce((a, b) => a + b, 0) / linesArr.length)
+        : null,
+      avgFilesChanged: filesArr.length
+        ? Math.round(filesArr.reduce((a, b) => a + b, 0) / filesArr.length * 10) / 10
+        : null,
+      authoredPRs: openedItems.map(pr => mapItem(pr, detailMap)),
+      reviewedPRs: reviewedItems.map(pr => mapItem(pr, detailMap)),
     };
   }
 

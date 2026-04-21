@@ -225,6 +225,8 @@ tbody td { padding: 10px 16px; font-size: 13px; vertical-align: middle; }
 .commit-author img { width: 22px; height: 22px; border-radius: 50%; }
 .commit-sha { font-family: monospace; font-size: 12px; color: var(--accent); }
 .commit-sha:hover { text-decoration: underline; }
+.pr-title-link { color: var(--text); text-decoration: none; }
+.pr-title-link:hover { text-decoration: underline; }
 .commit-msg { max-width: 380px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .commit-date { color: var(--text-muted); white-space: nowrap; }
 
