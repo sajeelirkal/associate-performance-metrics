@@ -19,6 +19,85 @@ import {
 } from './demoData';
 import './App.css';
 
+const GH_CACHE_KEY = 'gh_cache';
+
+function ghCacheKey(repo, associates) {
+  return `${repo}|${associates}`;
+}
+
+function loadGhCache(repo, associates) {
+  try {
+    const raw = localStorage.getItem(GH_CACHE_KEY);
+    if (!raw) { console.log('[cache] No GitHub cache found'); return null; }
+    const cache = JSON.parse(raw);
+    const expected = ghCacheKey(repo, associates);
+    if (cache.key !== expected) {
+      console.log('[cache] GitHub cache key mismatch', { cached: cache.key, expected });
+      return null;
+    }
+    console.log(`[cache] Restored GitHub data from ${new Date(cache.ts).toLocaleString()}`);
+    return cache;
+  } catch (e) { console.warn('[cache] Failed to load GitHub cache:', e.message); return null; }
+}
+
+function saveGhCache(repo, since, until, associates, contributors, commits, prMetrics) {
+  try {
+    const cache = {
+      key: ghCacheKey(repo, associates),
+      ts: Date.now(),
+      since, until,
+      contributors,
+      commits,
+      prMetrics,
+    };
+    const json = JSON.stringify(cache);
+    localStorage.setItem(GH_CACHE_KEY, json);
+    console.log(`[cache] Saved GitHub data (${(json.length / 1024).toFixed(0)} KB)`);
+  } catch (e) {
+    console.warn('[cache] Failed to save GitHub data:', e.message);
+    try { localStorage.removeItem(GH_CACHE_KEY); } catch {}
+  }
+}
+
+const JIRA_CACHE_KEY = 'jira_cache';
+
+function jiraCacheKey(base, usernames) {
+  return `${base}|${usernames}`;
+}
+
+function loadJiraCache(base, usernames) {
+  try {
+    const raw = localStorage.getItem(JIRA_CACHE_KEY);
+    if (!raw) { console.log('[cache] No Jira cache found'); return null; }
+    const cache = JSON.parse(raw);
+    const expected = jiraCacheKey(base, usernames);
+    if (cache.key !== expected) {
+      console.log('[cache] Jira cache key mismatch', { cached: cache.key, expected });
+      return null;
+    }
+    console.log(`[cache] Restored Jira data from ${new Date(cache.ts).toLocaleString()}`);
+    return cache;
+  } catch (e) { console.warn('[cache] Failed to load Jira cache:', e.message); return null; }
+}
+
+function saveJiraCache(base, usernames, since, until, issues, remoteLinks) {
+  try {
+    const cache = {
+      key: jiraCacheKey(base, usernames),
+      ts: Date.now(),
+      since, until,
+      issues,
+      remoteLinks,
+    };
+    const json = JSON.stringify(cache);
+    localStorage.setItem(JIRA_CACHE_KEY, json);
+    console.log(`[cache] Saved Jira data (${(json.length / 1024).toFixed(0)} KB)`);
+  } catch (e) {
+    console.warn('[cache] Failed to save Jira data:', e.message);
+    try { localStorage.removeItem(JIRA_CACHE_KEY); } catch {}
+  }
+}
+
 const COLORS = ['#58a6ff','#3fb950','#f78166','#d2a8ff','#ffa657','#39d353','#ff7b72','#79c0ff','#56d364','#e3b341'];
 const QUICK_RANGES = [
   { label: '7d', days: 7 }, { label: '30d', days: 30 },
@@ -285,6 +364,7 @@ export default function App() {
   const [ghLoading,    setGhLoading]    = useState(false);
   const [ghError,      setGhError]      = useState(null);
   const [ghFetched,    setGhFetched]    = useState(false);
+  const [ghCacheTs,    setGhCacheTs]    = useState(null);
   const [ghOAuthSuccess, setGhOAuthSuccess] = useState(false);
   const [selectedAuthors, setSelectedAuthors] = useState([]);
   const [hoveredDay,   setHoveredDay]   = useState(null);
@@ -293,12 +373,38 @@ export default function App() {
   const [prListTab,    setPrListTab]    = useState('authored'); // 'authored' | 'reviewed'
   useEffect(() => { setPrListPage(1); }, [activeAssociate]);
 
+  // ── Restore caches on load ──
+  useEffect(() => {
+    const ghCache = loadGhCache(ghRepo, associates);
+    if (ghCache) {
+      setContributors(ghCache.contributors ?? []);
+      setCommits(ghCache.commits ?? []);
+      setPrMetrics(ghCache.prMetrics ?? {});
+      setGhCacheTs(ghCache.ts);
+      setGhFetched(true);
+      if (ghCache.since) setSinceDate(parseISO(ghCache.since));
+      if (ghCache.until) setUntilDate(parseISO(ghCache.until));
+    }
+    const jCache = loadJiraCache(jiraBase, jiraUsernames.join(','));
+    if (jCache) {
+      setJiraIssues(jCache.issues ?? []);
+      setRemoteLinks(jCache.remoteLinks ?? {});
+      setJiraCacheTs(jCache.ts);
+      setJiraFetched(true);
+      if (!ghCache) {
+        if (jCache.since) setSinceDate(parseISO(jCache.since));
+        if (jCache.until) setUntilDate(parseISO(jCache.until));
+      }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Jira state ──
   const [jiraIssues,  setJiraIssues]  = useState([]);
   const [remoteLinks, setRemoteLinks] = useState({}); // { issueKey: [link, ...] }
   const [jiraLoading, setJiraLoading] = useState(false);
   const [jiraError,   setJiraError]   = useState(null);
   const [jiraFetched, setJiraFetched] = useState(false);
+  const [jiraCacheTs, setJiraCacheTs] = useState(null);
   const [jiraSearch,  setJiraSearch]  = useState('');
   const [jiraFilter,  setJiraFilter]  = useState('all'); // all | open | done
   const [jiraResFilter, setJiraResFilter] = useState('all'); // all | exclude-obsolete
@@ -547,6 +653,13 @@ export default function App() {
         }
       }
       setPrMetrics(normalizedPr);
+
+      const filteredContribs = associateList.length > 0
+        ? contribs.filter(c => relevantLogins.has(c.login.toLowerCase()))
+        : contribs.slice(0, 20);
+      saveGhCache(ghRepo, since, until, associates, filteredContribs, rawCommits.sort((a, b) => new Date(b.date) - new Date(a.date)), normalizedPr);
+      setGhCacheTs(null);
+
       if (mergedPr._rateLimited) {
         setPrFetchNote('⚠ GitHub search rate limit reached — PR data may be incomplete. Connect via OAuth or wait a minute and re-fetch.');
       } else if (!token) {
@@ -605,8 +718,14 @@ export default function App() {
       setJiraIssues(issues);
       const keys = issues.map(i => i.key);
       fetchRemoteLinksForIssues(jiraBase, jiraApiKey, jiraEmail, keys)
-        .then(links => setRemoteLinks(links))
-        .catch(() => {});
+        .then(links => {
+          setRemoteLinks(links);
+          saveJiraCache(jiraBase, jiraUsernames.join(','), since, until, issues, links);
+        })
+        .catch(() => {
+          saveJiraCache(jiraBase, jiraUsernames.join(','), since, until, issues, {});
+        });
+      setJiraCacheTs(null);
       setJiraPage(1); setJiraFetched(true);
     } catch (e) { setJiraError(e.message); }
     finally { setJiraLoading(false); }
@@ -1944,6 +2063,13 @@ export default function App() {
             )}
             {ghLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from {ghRepo || 'GitHub'}…</div>}
 
+            {ghFetched && !ghLoading && ghCacheTs && (
+              <div className="alert" style={{ background:'var(--surface)', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:13, marginBottom:8 }}>
+                Showing cached data from {new Date(ghCacheTs).toLocaleString()}.{' '}
+                <button className="btn btn-outline" style={{ padding:'2px 10px', fontSize:12 }} onClick={handleFetchGitHub}>Refresh</button>
+              </div>
+            )}
+
             {ghFetched && !ghLoading && (
               <>
                 {/* Contributor chips */}
@@ -2611,6 +2737,13 @@ export default function App() {
               </div>
             )}
             {jiraLoading && <div className="loading-overlay"><div className="spinner"/>Fetching Jira issues…</div>}
+
+            {jiraFetched && !jiraLoading && jiraCacheTs && (
+              <div className="alert" style={{ background:'var(--surface)', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:13, marginBottom:8 }}>
+                Showing cached data from {new Date(jiraCacheTs).toLocaleString()}.{' '}
+                <button className="btn btn-outline" style={{ padding:'2px 10px', fontSize:12 }} onClick={handleFetchJira}>Refresh</button>
+              </div>
+            )}
 
             {jiraFetched && !jiraLoading && (
               <>
