@@ -290,6 +290,9 @@ export default function App() {
   const [hoveredDay,   setHoveredDay]   = useState(null);
   const [searchMsg,    setSearchMsg]    = useState('');
   const [ghPage,       setGhPage]       = useState(1);
+  const [prListSearch, setPrListSearch] = useState('');
+  const [prListPage,   setPrListPage]   = useState(1);
+  const [prListTab,    setPrListTab]    = useState('authored'); // 'authored' | 'reviewed'
 
   // ── Jira state ──
   const [jiraIssues,  setJiraIssues]  = useState([]);
@@ -692,6 +695,34 @@ export default function App() {
     const s = (ghPage - 1) * PAGE_SIZE;
     return filteredCommits.slice(s, s + PAGE_SIZE);
   }, [filteredCommits, ghPage]);
+
+  const prListItems = useMemo(() => {
+    const logins = activeAssociate
+      ? [activeAssociate.toLowerCase()]
+      : associateList.map(a => a.toLowerCase());
+    const allItems = [];
+    const seen = new Set();
+    for (const login of logins) {
+      const m = prMetrics[login];
+      if (!m) continue;
+      const items = prListTab === 'authored' ? (m.authoredPRs ?? []) : (m.reviewedPRs ?? []);
+      for (const pr of items) {
+        if (!seen.has(pr.number)) { seen.add(pr.number); allItems.push({ ...pr, login }); }
+      }
+    }
+    const q = prListSearch.toLowerCase();
+    const filtered = q
+      ? allItems.filter(pr => pr.title.toLowerCase().includes(q) || pr.author.toLowerCase().includes(q) || String(pr.number).includes(q))
+      : allItems;
+    filtered.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return filtered;
+  }, [prMetrics, activeAssociate, associateList, prListTab, prListSearch]);
+
+  const pagedPRList = useMemo(() => {
+    const s = (prListPage - 1) * PAGE_SIZE;
+    return prListItems.slice(s, s + PAGE_SIZE);
+  }, [prListItems, prListPage]);
+  const prListTotalPages = Math.ceil(prListItems.length / PAGE_SIZE);
 
   const commitsPerDayData = useMemo(() => {
     if (!filteredCommits.length) return [];
@@ -2104,6 +2135,14 @@ export default function App() {
                               const vals = prRows.map(r=>r.avgCycleTimeDays).filter(v=>v!=null);
                               return vals.length ? `${(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1)}d` : '—';
                             })(), color:'var(--accent5)' },
+                          { label:'Avg Lines/PR', value: (() => {
+                              const vals = prRows.map(r=>r.avgLinesChanged).filter(v=>v!=null);
+                              return vals.length ? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length).toLocaleString() : '—';
+                            })(), color:'#f0883e' },
+                          { label:'Avg Files/PR', value: (() => {
+                              const vals = prRows.map(r=>r.avgFilesChanged).filter(v=>v!=null);
+                              return vals.length ? (vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1) : '—';
+                            })(), color:'#f0883e' },
                           { label:'Churn Rate', tip: PR_CHURN_TIP, value: (() => {
                               const vals = prRows.map(r=>r.churnPct).filter(v=>v!=null);
                               return vals.length ? `${Math.round(vals.reduce((a,b)=>a+b,0)/vals.length)}%` : '—';
@@ -2133,6 +2172,27 @@ export default function App() {
                               </Bar>
                               <Bar dataKey="prsMerged" name="Merged" fill="var(--accent2)" radius={[4,4,0,0]}>
                                 <LabelList dataKey="prsMerged" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* PR Complexity */}
+                        <div className="chart-card">
+                          <h3>PR Complexity (Merged PRs)</h3>
+                          <ResponsiveContainer width="100%" height={240}>
+                            <BarChart data={prRows} margin={{ top:16, right:40, left:-20, bottom:0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+                              <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                              <YAxis yAxisId="lines" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                              <YAxis yAxisId="files" orientation="right" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} />
+                              <Tooltip content={<ChartTooltip />} />
+                              <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
+                              <Bar yAxisId="lines" dataKey="avgLinesChanged" name="Avg Lines Changed" fill="#f0883e" radius={[4,4,0,0]}>
+                                <LabelList dataKey="avgLinesChanged" position="top" fill="#8b949e" fontSize={10} formatter={v => v != null ? v.toLocaleString() : ''} />
+                              </Bar>
+                              <Bar yAxisId="files" dataKey="avgFilesChanged" name="Avg Files Changed" fill="#d29922" radius={[4,4,0,0]}>
+                                <LabelList dataKey="avgFilesChanged" position="top" fill="#8b949e" fontSize={10} formatter={v => v != null ? v : ''} />
                               </Bar>
                             </BarChart>
                           </ResponsiveContainer>
@@ -2187,35 +2247,70 @@ export default function App() {
                   );
                 })()}
 
-                {/* Commits table */}
+                {/* PR List */}
                 <div className="table-card">
                   <div className="table-header">
-                    <h3>Commit Log <span className="badge">{filteredCommits.length.toLocaleString()}</span></h3>
-                    <input className="input" type="text" placeholder="Search message or author…"
-                      value={searchMsg} onChange={e => { setSearchMsg(e.target.value); setGhPage(1); }} style={{ width:260 }} />
+                    <h3>
+                      <span style={{ display:'inline-flex', gap:4 }}>
+                        <button className={`btn ${prListTab==='authored' ? 'btn-primary' : 'btn-outline'}`} style={{ padding:'4px 12px', fontSize:13 }}
+                          onClick={() => { setPrListTab('authored'); setPrListPage(1); }}>Authored PRs</button>
+                        <button className={`btn ${prListTab==='reviewed' ? 'btn-primary' : 'btn-outline'}`} style={{ padding:'4px 12px', fontSize:13 }}
+                          onClick={() => { setPrListTab('reviewed'); setPrListPage(1); }}>Reviewed PRs</button>
+                      </span>
+                      {' '}<span className="badge">{prListItems.length}</span>
+                    </h3>
+                    <input className="input" type="text" placeholder="Search title, author, or #…"
+                      value={prListSearch} onChange={e => { setPrListSearch(e.target.value); setPrListPage(1); }} style={{ width:260 }} />
                   </div>
                   <div className="table-wrap">
                     <table>
-                      <thead><tr><th>SHA</th><th>Author</th><th>Message</th><th>Date</th></tr></thead>
+                      <thead><tr>
+                        <th>#</th>
+                        <th>Title</th>
+                        <th>Author</th>
+                        <th>Status</th>
+                        {prListTab === 'authored' && <th>+/−</th>}
+                        {prListTab === 'authored' && <th>Files</th>}
+                        <th>Created</th>
+                        {prListTab === 'authored' && <th>Merged</th>}
+                      </tr></thead>
                       <tbody>
-                        {pagedCommits.length === 0 ? (
-                          <tr><td colSpan={4} style={{ textAlign:'center', padding:32, color:'var(--text-muted)' }}>No commits match current filters</td></tr>
-                        ) : pagedCommits.map(c => (
-                          <tr key={c.sha}>
-                            <td><a className="commit-sha" href={c.url} target="_blank" rel="noreferrer">{c.sha.slice(0,7)}</a></td>
-                            <td><div className="commit-author">{c.authorAvatar && <img src={c.authorAvatar} alt="" />}{c.author}</div></td>
-                            <td><span className="commit-msg" title={c.message}>{c.message}</span></td>
-                            <td className="commit-date">{fmtDate(c.date)}</td>
+                        {pagedPRList.length === 0 ? (
+                          <tr><td colSpan={prListTab === 'authored' ? 8 : 5} style={{ textAlign:'center', padding:32, color:'var(--text-muted)' }}>
+                            No PRs match current filters
+                          </td></tr>
+                        ) : pagedPRList.map(pr => (
+                          <tr key={`${pr.number}-${pr.login}`}>
+                            <td><a className="commit-sha" href={pr.url} target="_blank" rel="noreferrer">#{pr.number}</a></td>
+                            <td><a href={pr.url} target="_blank" rel="noreferrer" style={{ color:'var(--text)', textDecoration:'none' }}
+                              onMouseOver={e => e.currentTarget.style.textDecoration='underline'}
+                              onMouseOut={e => e.currentTarget.style.textDecoration='none'}>{pr.title}</a></td>
+                            <td>{pr.author}</td>
+                            <td>
+                              <span style={{
+                                padding:'2px 8px', borderRadius:12, fontSize:11, fontWeight:600,
+                                background: pr.state === 'merged' ? '#8957e5' : pr.state === 'open' ? '#238636' : '#da3633',
+                                color: '#fff',
+                              }}>
+                                {pr.state}
+                              </span>
+                            </td>
+                            {prListTab === 'authored' && <td style={{ fontSize:12, whiteSpace:'nowrap' }}>
+                              {pr.additions != null ? <><span style={{ color:'#3fb950' }}>+{pr.additions}</span>{' '}<span style={{ color:'#f85149' }}>−{pr.deletions}</span></> : '—'}
+                            </td>}
+                            {prListTab === 'authored' && <td>{pr.changedFiles ?? '—'}</td>}
+                            <td className="commit-date">{fmtDate(pr.createdAt)}</td>
+                            {prListTab === 'authored' && <td className="commit-date">{pr.mergedAt ? fmtDate(pr.mergedAt) : '—'}</td>}
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                  {Math.ceil(filteredCommits.length / PAGE_SIZE) > 1 && (
+                  {prListTotalPages > 1 && (
                     <div className="pagination">
-                      <button className="btn btn-outline" onClick={() => setGhPage(p => Math.max(1,p-1))} disabled={ghPage===1} style={{ padding:'4px 12px' }}>←</button>
-                      <span>Page {ghPage} of {Math.ceil(filteredCommits.length / PAGE_SIZE)}</span>
-                      <button className="btn btn-outline" onClick={() => setGhPage(p => Math.min(Math.ceil(filteredCommits.length/PAGE_SIZE),p+1))} disabled={ghPage===Math.ceil(filteredCommits.length/PAGE_SIZE)} style={{ padding:'4px 12px' }}>→</button>
+                      <button className="btn btn-outline" onClick={() => setPrListPage(p => Math.max(1,p-1))} disabled={prListPage===1} style={{ padding:'4px 12px' }}>←</button>
+                      <span>Page {prListPage} of {prListTotalPages}</span>
+                      <button className="btn btn-outline" onClick={() => setPrListPage(p => Math.min(prListTotalPages,p+1))} disabled={prListPage===prListTotalPages} style={{ padding:'4px 12px' }}>→</button>
                     </div>
                   )}
                 </div>
@@ -2935,6 +3030,8 @@ export default function App() {
                           <div className="perf-metric"><span>GH Reviews Given</span><strong style={{ color:'var(--accent4)' }}>{pr.prsReviewed ?? '—'}</strong></div>
                           <div className="perf-metric"><span>GH Review Comments</span><strong style={{ color:'#d2a8ff' }}>{pr.reviewComments ?? '—'}</strong></div>
                           <div className="perf-metric"><span>GH PR Cycle Time</span><strong>{pr.avgCycleTimeDays != null ? `${pr.avgCycleTimeDays}d` : '—'}</strong></div>
+                          <div className="perf-metric"><span>Avg Lines/PR</span><strong style={{ color:'#f0883e' }}>{pr.avgLinesChanged != null ? pr.avgLinesChanged.toLocaleString() : '—'}</strong></div>
+                          <div className="perf-metric"><span>Avg Files/PR</span><strong style={{ color:'#d29922' }}>{pr.avgFilesChanged != null ? pr.avgFilesChanged : '—'}</strong></div>
                           <div className="perf-metric"><span>PR Churn <InfoTip text={PR_CHURN_TIP} /></span><strong style={{ color: (pr.churnPct??0)>60?'var(--danger)':'inherit' }}>{pr.churnPct != null ? `${pr.churnPct}%` : '—'}</strong></div>
                         </>}
                         {/* GL MR metrics */}
@@ -3097,6 +3194,8 @@ export default function App() {
                           <th>GH PRs Merged</th>
                           <th>GL MRs Merged</th>
                           <th>Reviews</th>
+                          <th>Avg Lines/PR</th>
+                          <th>Avg Files/PR</th>
                           <th>PR Churn <InfoTip text={PR_CHURN_TIP} /></th>
                           <th>Last Commit</th>
                         </tr>
@@ -3128,6 +3227,8 @@ export default function App() {
                             <td style={{ color:'var(--accent)', fontWeight:600 }}>{pr?.prsMerged ?? '—'}</td>
                             <td style={{ color:'#FC6D26', fontWeight:600 }}>{p.glMRsMerged ?? '—'}</td>
                             <td style={{ color:'var(--accent4)', fontWeight:600 }}>{(pr?.prsReviewed ?? 0) + (p.glMRsReviewed ?? 0)}</td>
+                            <td style={{ color:'#f0883e', fontWeight:600 }}>{pr?.avgLinesChanged != null ? pr.avgLinesChanged.toLocaleString() : '—'}</td>
+                            <td style={{ color:'#d29922', fontWeight:600 }}>{pr?.avgFilesChanged ?? '—'}</td>
                             <td>
                               {pr?.churnPct != null
                                 ? <span style={{ color:(pr.churnPct>60)?'var(--danger)':'inherit', fontWeight:600 }}>{pr.churnPct}%</span>

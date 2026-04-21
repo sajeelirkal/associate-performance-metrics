@@ -112,10 +112,29 @@ async function searchGitHub(headers, query, maxItems = 300) {
   return results;
 }
 
+async function fetchPRDetails(headers, owner, name, prNumbers) {
+  const results = [];
+  const BATCH = 6;
+  for (let i = 0; i < prNumbers.length; i += BATCH) {
+    const batch = prNumbers.slice(i, i + BATCH);
+    const settled = await Promise.allSettled(
+      batch.map(num =>
+        fetch(`${BASE_URL}/repos/${owner}/${name}/pulls/${num}`, { headers })
+          .then(r => r.ok ? r.json() : null)
+      )
+    );
+    for (const r of settled) {
+      if (r.status === 'fulfilled' && r.value) results.push(r.value);
+    }
+  }
+  return results;
+}
+
 /**
  * Fetch per-author PR statistics using the GitHub Search API.
  * Returns a map: { [login]: { prsOpened, prsMerged, prsReviewed, prsChurned,
- *                             avgCycleTimeDays, churnPct, reviewComments } }
+ *                             avgCycleTimeDays, churnPct, reviewComments,
+ *                             avgLinesChanged, avgFilesChanged } }
  */
 export async function fetchPRMetrics(token, repoFullName, authors = [], since = null, until = null) {
   if (!authors.length) return {};
@@ -155,7 +174,7 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
   for (let ai = 0; ai < authors.length; ai++) {
     const author = authors[ai];
     if (rateLimited) {
-      metrics[author] = { _rateLimited: true, prsOpened:0, prsMerged:0, prsReviewed:0, prsChurned:0, avgCycleTimeDays:null, churnPct:0, reviewComments:0 };
+      metrics[author] = { _rateLimited: true, prsOpened:0, prsMerged:0, prsReviewed:0, prsChurned:0, avgCycleTimeDays:null, churnPct:0, reviewComments:0, avgLinesChanged:null, avgFilesChanged:null, authoredPRs:[], reviewedPRs:[] };
       continue;
     }
 
@@ -185,6 +204,14 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
       }
     }
 
+    // Fetch PR detail for complexity metrics
+    let prDetails = [];
+    if (!rateLimited && mergedItems.length > 0) {
+      try {
+        prDetails = await fetchPRDetails(headers, owner, name, mergedItems.map(pr => pr.number));
+      } catch { /* non-fatal */ }
+    }
+
     // Throttle before next author's batch
     if (!rateLimited && ai < authors.length - 1) await sleep(SEARCH_DELAY_MS);
 
@@ -204,6 +231,28 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
       return false;
     }).length;
 
+    const linesArr = prDetails.map(d => (d.additions ?? 0) + (d.deletions ?? 0));
+    const filesArr = prDetails.map(d => d.changed_files ?? 0);
+
+    const detailMap = new Map(prDetails.map(d => [d.number, d]));
+
+    const mapItem = (pr) => {
+      const detail = detailMap.get(pr.number);
+      return {
+        number: pr.number,
+        title: pr.title,
+        url: pr.html_url,
+        state: pr.pull_request?.merged_at ? 'merged' : pr.state,
+        author: pr.user?.login ?? '',
+        createdAt: pr.created_at,
+        mergedAt: pr.pull_request?.merged_at ?? null,
+        closedAt: pr.closed_at ?? null,
+        additions: detail?.additions ?? null,
+        deletions: detail?.deletions ?? null,
+        changedFiles: detail?.changed_files ?? null,
+      };
+    };
+
     metrics[author] = {
       _rateLimited:    rateLimited,
       prsOpened:       openedItems.length,
@@ -217,6 +266,14 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
         ? Math.round((prsChurned / openedItems.length) * 100)
         : 0,
       reviewComments,
+      avgLinesChanged: linesArr.length
+        ? Math.round(linesArr.reduce((a, b) => a + b, 0) / linesArr.length)
+        : null,
+      avgFilesChanged: filesArr.length
+        ? Math.round(filesArr.reduce((a, b) => a + b, 0) / filesArr.length * 10) / 10
+        : null,
+      authoredPRs: openedItems.map(mapItem),
+      reviewedPRs: reviewedItems.map(mapItem),
     };
   }
 
