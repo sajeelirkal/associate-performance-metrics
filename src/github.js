@@ -116,16 +116,22 @@ async function fetchPRDetails(headers, owner, name, prNumbers) {
   const results = [];
   const BATCH = 6;
   for (let i = 0; i < prNumbers.length; i += BATCH) {
+    if (i > 0) await sleep(SEARCH_DELAY_MS);
     const batch = prNumbers.slice(i, i + BATCH);
+    let hitRateLimit = false;
     const settled = await Promise.allSettled(
       batch.map(num =>
         fetch(`${BASE_URL}/repos/${owner}/${name}/pulls/${num}`, { headers })
-          .then(r => r.ok ? r.json() : null)
+          .then(r => {
+            if (r.status === 403 || r.status === 429) { hitRateLimit = true; return null; }
+            return r.ok ? r.json() : null;
+          })
       )
     );
     for (const r of settled) {
       if (r.status === 'fulfilled' && r.value) results.push(r.value);
     }
+    if (hitRateLimit) break;
   }
   return results;
 }
@@ -168,6 +174,23 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
     }
   }
 
+  const mapItem = (pr, detailMap) => {
+    const detail = detailMap.get(pr.number);
+    return {
+      number: pr.number,
+      title: pr.title,
+      url: pr.html_url,
+      state: pr.pull_request?.merged_at ? 'merged' : pr.state,
+      author: pr.user?.login ?? '',
+      createdAt: pr.created_at,
+      mergedAt: pr.pull_request?.merged_at ?? null,
+      closedAt: pr.closed_at ?? null,
+      additions: detail?.additions ?? null,
+      deletions: detail?.deletions ?? null,
+      changedFiles: detail?.changed_files ?? null,
+    };
+  };
+
   const metrics = {};
   let rateLimited = false;
 
@@ -204,12 +227,18 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
       }
     }
 
-    // Fetch PR detail for complexity metrics
+    // Fetch PR detail for complexity metrics and per-PR additions/deletions/files
     let prDetails = [];
-    if (!rateLimited && mergedItems.length > 0) {
-      try {
-        prDetails = await fetchPRDetails(headers, owner, name, mergedItems.map(pr => pr.number));
-      } catch { /* non-fatal */ }
+    if (!rateLimited) {
+      const allPRNumbers = [...new Set([
+        ...openedItems.map(pr => pr.number),
+        ...reviewedItems.map(pr => pr.number),
+      ])];
+      if (allPRNumbers.length > 0) {
+        try {
+          prDetails = await fetchPRDetails(headers, owner, name, allPRNumbers);
+        } catch { /* non-fatal */ }
+      }
     }
 
     // Throttle before next author's batch
@@ -231,27 +260,11 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
       return false;
     }).length;
 
-    const linesArr = prDetails.map(d => (d.additions ?? 0) + (d.deletions ?? 0));
-    const filesArr = prDetails.map(d => d.changed_files ?? 0);
-
     const detailMap = new Map(prDetails.map(d => [d.number, d]));
-
-    const mapItem = (pr) => {
-      const detail = detailMap.get(pr.number);
-      return {
-        number: pr.number,
-        title: pr.title,
-        url: pr.html_url,
-        state: pr.pull_request?.merged_at ? 'merged' : pr.state,
-        author: pr.user?.login ?? '',
-        createdAt: pr.created_at,
-        mergedAt: pr.pull_request?.merged_at ?? null,
-        closedAt: pr.closed_at ?? null,
-        additions: detail?.additions ?? null,
-        deletions: detail?.deletions ?? null,
-        changedFiles: detail?.changed_files ?? null,
-      };
-    };
+    const mergedNumbers = new Set(mergedItems.map(pr => pr.number));
+    const mergedDetails = prDetails.filter(d => mergedNumbers.has(d.number));
+    const linesArr = mergedDetails.map(d => (d.additions ?? 0) + (d.deletions ?? 0));
+    const filesArr = mergedDetails.map(d => d.changed_files ?? 0);
 
     metrics[author] = {
       _rateLimited:    rateLimited,
@@ -272,8 +285,8 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
       avgFilesChanged: filesArr.length
         ? Math.round(filesArr.reduce((a, b) => a + b, 0) / filesArr.length * 10) / 10
         : null,
-      authoredPRs: openedItems.map(mapItem),
-      reviewedPRs: reviewedItems.map(mapItem),
+      authoredPRs: openedItems.map(pr => mapItem(pr, detailMap)),
+      reviewedPRs: reviewedItems.map(pr => mapItem(pr, detailMap)),
     };
   }
 

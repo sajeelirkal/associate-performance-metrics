@@ -288,11 +288,10 @@ export default function App() {
   const [ghOAuthSuccess, setGhOAuthSuccess] = useState(false);
   const [selectedAuthors, setSelectedAuthors] = useState([]);
   const [hoveredDay,   setHoveredDay]   = useState(null);
-  const [searchMsg,    setSearchMsg]    = useState('');
-  const [ghPage,       setGhPage]       = useState(1);
   const [prListSearch, setPrListSearch] = useState('');
   const [prListPage,   setPrListPage]   = useState(1);
   const [prListTab,    setPrListTab]    = useState('authored'); // 'authored' | 'reviewed'
+  useEffect(() => { setPrListPage(1); }, [activeAssociate]);
 
   // ── Jira state ──
   const [jiraIssues,  setJiraIssues]  = useState([]);
@@ -555,7 +554,7 @@ export default function App() {
       } else {
         setPrFetchNote('');
       }
-      setSelectedAuthors([]); setGhPage(1); setGhFetched(true);
+      setSelectedAuthors([]); setGhFetched(true);
     } catch (e) { setGhError(e.message); }
     finally { setGhLoading(false); }
   }, [token, ghRepo, associateList, since, until]);
@@ -662,7 +661,6 @@ export default function App() {
     setJiraError(null);
     setDemoMode(true);
     setActiveAssociate(null);
-    setGhPage(1);
     setJiraPage(1);
     setTab('github');
   }, []);
@@ -686,15 +684,8 @@ export default function App() {
     // Global associate filter takes precedence over multi-select chips
     if (activeAssociate && c.author?.toLowerCase() !== activeAssociate.toLowerCase()) return false;
     if (!activeAssociate && selectedAuthors.length > 0 && !selectedAuthors.includes(c.author)) return false;
-    if (searchMsg && !c.message.toLowerCase().includes(searchMsg.toLowerCase()) &&
-        !c.author.toLowerCase().includes(searchMsg.toLowerCase())) return false;
     return true;
-  }), [commits, selectedAuthors, activeAssociate, searchMsg]);
-
-  const pagedCommits = useMemo(() => {
-    const s = (ghPage - 1) * PAGE_SIZE;
-    return filteredCommits.slice(s, s + PAGE_SIZE);
-  }, [filteredCommits, ghPage]);
+  }), [commits, selectedAuthors, activeAssociate]);
 
   const prListItems = useMemo(() => {
     const logins = activeAssociate
@@ -717,6 +708,13 @@ export default function App() {
     filtered.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return filtered;
   }, [prMetrics, activeAssociate, associateList, prListTab, prListSearch]);
+
+  const prListRateLimited = useMemo(() => {
+    const logins = activeAssociate
+      ? [activeAssociate.toLowerCase()]
+      : associateList.map(a => a.toLowerCase());
+    return logins.some(l => prMetrics[l]?._rateLimited);
+  }, [prMetrics, activeAssociate, associateList]);
 
   const pagedPRList = useMemo(() => {
     const s = (prListPage - 1) * PAGE_SIZE;
@@ -1278,7 +1276,6 @@ export default function App() {
   // ── Render helpers ────────────────────────────────────────────────────────
   const toggleAuthor = (login) => {
     setSelectedAuthors(prev => prev.includes(login) ? prev.filter(a => a !== login) : [...prev, login]);
-    setGhPage(1);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1957,7 +1954,7 @@ export default function App() {
                       <div className="chip-list">
                         <button
                           className={`chip chip-all ${!activeAssociate && selectedAuthors.length === 0 ? 'active' : ''}`}
-                          onClick={() => { setActiveAssociate(null); setSelectedAuthors([]); setGhPage(1); }}
+                          onClick={() => { setActiveAssociate(null); setSelectedAuthors([]); }}
                         >All</button>
                         {contributors.map((c, i) => {
                           const normalized = associateList.find(a => a.toLowerCase() === c.login.toLowerCase()) || c.login;
@@ -1968,7 +1965,6 @@ export default function App() {
                             onClick={() => {
                               setActiveAssociate(prev => prev?.toLowerCase() === normalized.toLowerCase() ? null : normalized);
                               setSelectedAuthors([]);
-                              setGhPage(1);
                             }}
                           >
                             {c.avatarUrl && <img src={c.avatarUrl} alt="" />}
@@ -2181,11 +2177,13 @@ export default function App() {
                         <div className="chart-card">
                           <h3>PR Complexity (Merged PRs)</h3>
                           <ResponsiveContainer width="100%" height={240}>
-                            <BarChart data={prRows} margin={{ top:16, right:40, left:-20, bottom:0 }}>
+                            <BarChart data={prRows} margin={{ top:16, right:50, left:0, bottom:0 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                               <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
-                              <YAxis yAxisId="lines" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
-                              <YAxis yAxisId="files" orientation="right" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} />
+                              <YAxis yAxisId="lines" tick={{ fill:'#f0883e', fontSize:10 }} tickLine={false} axisLine={false} allowDecimals={false}
+                                label={{ value:'Lines', angle:-90, position:'insideLeft', fill:'#f0883e', fontSize:11, dx:-4 }} />
+                              <YAxis yAxisId="files" orientation="right" tick={{ fill:'#d29922', fontSize:10 }} tickLine={false} axisLine={false}
+                                label={{ value:'Files', angle:90, position:'insideRight', fill:'#d29922', fontSize:11, dx:4 }} />
                               <Tooltip content={<ChartTooltip />} />
                               <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
                               <Bar yAxisId="lines" dataKey="avgLinesChanged" name="Avg Lines Changed" fill="#f0883e" radius={[4,4,0,0]}>
@@ -2262,29 +2260,36 @@ export default function App() {
                     <input className="input" type="text" placeholder="Search title, author, or #…"
                       value={prListSearch} onChange={e => { setPrListSearch(e.target.value); setPrListPage(1); }} style={{ width:260 }} />
                   </div>
+                  {prListRateLimited && (
+                    <div style={{ padding:'6px 14px', fontSize:12, color:'var(--accent5)', background:'rgba(210,168,255,0.08)', borderBottom:'1px solid var(--border)' }}>
+                      ⚠ GitHub rate limit reached — PR data may be incomplete for some associates.
+                    </div>
+                  )}
                   <div className="table-wrap">
+                    {(() => {
+                      const isAuthored = prListTab === 'authored';
+                      const prColCount = isAuthored ? 8 : 5;
+                      return (
                     <table>
                       <thead><tr>
                         <th>#</th>
                         <th>Title</th>
                         <th>Author</th>
                         <th>Status</th>
-                        {prListTab === 'authored' && <th>+/−</th>}
-                        {prListTab === 'authored' && <th>Files</th>}
+                        {isAuthored && <th>+/−</th>}
+                        {isAuthored && <th>Files</th>}
                         <th>Created</th>
-                        {prListTab === 'authored' && <th>Merged</th>}
+                        {isAuthored && <th>Merged</th>}
                       </tr></thead>
                       <tbody>
                         {pagedPRList.length === 0 ? (
-                          <tr><td colSpan={prListTab === 'authored' ? 8 : 5} style={{ textAlign:'center', padding:32, color:'var(--text-muted)' }}>
+                          <tr><td colSpan={prColCount} style={{ textAlign:'center', padding:32, color:'var(--text-muted)' }}>
                             No PRs match current filters
                           </td></tr>
                         ) : pagedPRList.map(pr => (
                           <tr key={`${pr.number}-${pr.login}`}>
                             <td><a className="commit-sha" href={pr.url} target="_blank" rel="noreferrer">#{pr.number}</a></td>
-                            <td><a href={pr.url} target="_blank" rel="noreferrer" style={{ color:'var(--text)', textDecoration:'none' }}
-                              onMouseOver={e => e.currentTarget.style.textDecoration='underline'}
-                              onMouseOut={e => e.currentTarget.style.textDecoration='none'}>{pr.title}</a></td>
+                            <td><a className="pr-title-link" href={pr.url} target="_blank" rel="noreferrer">{pr.title}</a></td>
                             <td>{pr.author}</td>
                             <td>
                               <span style={{
@@ -2295,16 +2300,18 @@ export default function App() {
                                 {pr.state}
                               </span>
                             </td>
-                            {prListTab === 'authored' && <td style={{ fontSize:12, whiteSpace:'nowrap' }}>
+                            {isAuthored && <td style={{ fontSize:12, whiteSpace:'nowrap' }}>
                               {pr.additions != null ? <><span style={{ color:'#3fb950' }}>+{pr.additions}</span>{' '}<span style={{ color:'#f85149' }}>−{pr.deletions}</span></> : '—'}
                             </td>}
-                            {prListTab === 'authored' && <td>{pr.changedFiles ?? '—'}</td>}
+                            {isAuthored && <td>{pr.changedFiles ?? '—'}</td>}
                             <td className="commit-date">{fmtDate(pr.createdAt)}</td>
-                            {prListTab === 'authored' && <td className="commit-date">{pr.mergedAt ? fmtDate(pr.mergedAt) : '—'}</td>}
+                            {isAuthored && <td className="commit-date">{pr.mergedAt ? fmtDate(pr.mergedAt) : '—'}</td>}
                           </tr>
                         ))}
                       </tbody>
                     </table>
+                      );
+                    })()}
                   </div>
                   {prListTotalPages > 1 && (
                     <div className="pagination">
