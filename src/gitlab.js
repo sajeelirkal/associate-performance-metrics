@@ -85,3 +85,49 @@ export async function fetchGitLabMRMetrics(glUrl, glToken, glProject, authors = 
   });
   return data.metrics ?? {};
 }
+
+// ── Multi-project wrappers ───────────────────────────────────────────────────
+
+function parseProjectList(input) {
+  if (Array.isArray(input)) return input.map(p => p.trim()).filter(Boolean);
+  return (input || '').split(',').map(p => p.trim()).filter(Boolean);
+}
+
+export async function fetchMultiProjectCommits(glUrl, glToken, projects, authors = [], since = null, until = null) {
+  const projectList = parseProjectList(projects);
+  let allCommits = [];
+  for (const project of projectList) {
+    const commits = await fetchGitLabCommits(glUrl, glToken, project, authors, since, until);
+    allCommits = allCommits.concat(commits);
+  }
+  const seen = new Set();
+  return allCommits.filter(c => {
+    const key = c.sha || c.id || JSON.stringify(c);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export async function fetchMultiProjectMRMetrics(glUrl, glToken, projects, authors = [], since = null, until = null) {
+  const projectList = parseProjectList(projects);
+  const merged = {};
+
+  for (const project of projectList) {
+    const metrics = await fetchGitLabMRMetrics(glUrl, glToken, project, authors, since, until);
+    for (const [login, data] of Object.entries(metrics)) {
+      const existing = merged[login];
+      if (!existing) {
+        merged[login] = { ...data };
+      } else if (data && typeof data === 'object') {
+        for (const [k, v] of Object.entries(data)) {
+          if (typeof v === 'number') {
+            existing[k] = (existing[k] ?? 0) + v;
+          }
+        }
+      }
+    }
+  }
+
+  return merged;
+}
