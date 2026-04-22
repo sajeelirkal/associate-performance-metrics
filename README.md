@@ -20,11 +20,13 @@
 
 ## Features
 
-- **GitHub Tab** — Commits, contributors, PR activity (opened / merged / reviewed), PR churn & cycle time charts, weekly commit breakdowns, and contribution share
+- **GitHub Tab** — Commits, contributors, PR activity (opened / merged / reviewed), PR churn & cycle time charts, PR complexity metrics (avg lines/files per PR), browsable authored & reviewed PR lists with search and pagination, weekly commit breakdowns, and contribution share
 - **GitLab Tab** — Merge requests, commit tracking, review notes, and activity breakdowns across projects
 - **Jira Tab** — Issues, sprint spillovers, cycle time, story points, status transitions, per-associate filtering, and search
-- **Performance Tab** — Unified metrics across all platforms, per-associate scorecards, relative radar chart, 1:1 associate deep-dive, and full summary table
+- **Performance Tab** — Unified metrics across all platforms, per-associate scorecards, relative radar chart, 1:1 associate deep-dive, and full summary table with PR complexity data
 - **Settings Tab** — GitHub OAuth / PAT, Jira Cloud & Data Center config, GitLab self-managed support, date range picker, GitHub-Jira username mapping, single "Fetch All" button
+- **Multi-Repository Support** — Configure multiple GitHub repositories and GitLab projects via add/remove row inputs; data from all repos/projects is merged into a single unified view
+- **Smart Caching** — localStorage-based caching with 12-hour TTL and 4 MB size guard per entry; cache banners show data freshness with one-click refresh; Clear Cache button in Settings
 - **Demo Mode** — One-click synthetic data with a realistic performance spread for presentations and evaluation
 
 ---
@@ -32,7 +34,7 @@
 ## Screenshots
 
 <details>
-<summary><strong>GitHub Analytics</strong> — Commit activity, contribution share, weekly breakdowns</summary>
+<summary><strong>GitHub Analytics</strong> — Commit activity, contribution share, PR complexity, browsable PR list</summary>
 <br />
 <img src="docs/screenshots/github.png" alt="GitHub Tab" width="100%" />
 <br /><br />
@@ -54,7 +56,7 @@
 </details>
 
 <details>
-<summary><strong>Settings</strong> — Integration config, OAuth, date range, username mapping</summary>
+<summary><strong>Settings</strong> — Integration config, OAuth, date range, username mapping, multi-repo inputs, cache controls</summary>
 <br />
 <img src="docs/screenshots/settings.png" alt="Settings Tab" width="100%" />
 </details>
@@ -213,14 +215,37 @@ All integration configuration is done through the **Settings** tab in the UI:
 | Field             | Description                                                  |
 | ----------------- | ------------------------------------------------------------ |
 | GitHub token      | OAuth flow or manual PAT                                     |
-| Repository        | `owner/repo` format (e.g., `octocat/hello-world`)           |
+| Repositories      | One or more `owner/repo` entries via add/remove row inputs (data is merged across repos) |
 | Jira URL          | `https://your-org.atlassian.net` (Cloud) or Data Center URL |
 | Jira API Token    | PAT (Data Center) or API token (Cloud)                       |
 | Jira Email        | Only required for Jira Cloud (Basic Auth)                    |
 | GitLab URL        | Self-managed instance URL                                    |
 | GitLab Token      | Personal Access Token with `read_api` scope                  |
+| Project Paths     | One or more GitLab project paths via add/remove row inputs (data is merged across projects) |
 | Date range        | Calendar picker with quick presets                            |
 | Username mapping  | GitHub login <-> Jira username/email mapping table            |
+| Clear Cache       | Purges all cached GitHub, Jira, and GitLab data from localStorage |
+
+---
+
+## Caching
+
+Fetched data from GitHub, Jira, and GitLab is automatically stored in the browser's `localStorage` to avoid redundant API calls on page refresh.
+
+| Behaviour        | Detail                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| **TTL**          | Cached entries expire after **12 hours** and are silently discarded on next load              |
+| **Size guard**   | Entries exceeding **4 MB** are skipped to stay within `localStorage` quota limits             |
+| **Cache banner** | When cached data is loaded a banner shows the timestamp with a **Refresh** button             |
+| **Clear Cache**  | A dedicated button in Settings purges all cached data instantly                               |
+| **Key normalisation** | Cache keys normalise associate lists (trim, lowercase, sort) so reordering inputs doesn't invalidate the cache |
+| **PR list stripping** | Large PR detail arrays are removed before caching GitHub data to reduce storage footprint |
+
+---
+
+## Multi-Repository Support
+
+The dashboard supports fetching data from **multiple GitHub repositories** and **multiple GitLab projects** simultaneously. In the Settings tab, use the **+ Add repo / + Add project** buttons to create additional input rows. Data from all configured repos/projects is merged into a single unified view across commits, contributors, and PR/MR metrics.
 
 ---
 

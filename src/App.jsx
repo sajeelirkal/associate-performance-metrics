@@ -7,12 +7,12 @@ import {
 import { format, parseISO, eachDayOfInterval, subDays, subMonths, startOfDay } from 'date-fns';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import { fetchContributors, fetchCommits, fetchPRMetrics } from './github';
+import { fetchContributors, fetchCommits, fetchPRMetrics, fetchMultiRepoContributors, fetchMultiRepoCommits, fetchMultiRepoPRMetrics } from './github';
 import {
   fetchJiraIssues, fetchRemoteLinksForIssues, normaliseIssue, checkBackendHealth, resolveJiraUser,
 } from './jira';
 import {
-  testGitLabConnection, fetchGitLabCommits, fetchGitLabMRMetrics,
+  testGitLabConnection, fetchGitLabCommits, fetchGitLabMRMetrics, fetchMultiProjectCommits, fetchMultiProjectMRMetrics,
 } from './gitlab';
 import {
   DEMO_CONTRIBUTORS, DEMO_COMMITS, DEMO_JIRA_ISSUES, DEMO_MAPPINGS, DEMO_ASSOCIATES, DEMO_PR_METRICS,
@@ -538,6 +538,45 @@ export default function App() {
     return associates.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
   }, [userMapping, associates]);
 
+  const ghRepoList = useMemo(() =>
+    (ghRepo || '').split(',').map(r => r.trim()).filter(Boolean), [ghRepo]);
+  const glProjectList = useMemo(() =>
+    (glProject || '').split(',').map(p => p.trim()).filter(Boolean), [glProject]);
+
+  const ghRepoRows = useMemo(() => {
+    const list = (ghRepo || '').split(',').map(r => r.trim());
+    return list.length > 0 && list.some(Boolean) ? list : [''];
+  }, [ghRepo]);
+  const setGhRepoRow = useCallback((i, val) => {
+    const rows = [...ghRepoRows];
+    rows[i] = val;
+    setGhRepo(rows.join(', '));
+  }, [ghRepoRows]);
+  const addGhRepoRow = useCallback(() => {
+    setGhRepo(ghRepoRows.join(', ') + ', ');
+  }, [ghRepoRows]);
+  const removeGhRepoRow = useCallback((i) => {
+    const rows = ghRepoRows.filter((_, j) => j !== i);
+    setGhRepo(rows.length ? rows.join(', ') : '');
+  }, [ghRepoRows]);
+
+  const glProjectRows = useMemo(() => {
+    const list = (glProject || '').split(',').map(p => p.trim());
+    return list.length > 0 && list.some(Boolean) ? list : [''];
+  }, [glProject]);
+  const setGlProjectRow = useCallback((i, val) => {
+    const rows = [...glProjectRows];
+    rows[i] = val;
+    setGlProject(rows.join(', '));
+  }, [glProjectRows]);
+  const addGlProjectRow = useCallback(() => {
+    setGlProject(glProjectRows.join(', ') + ', ');
+  }, [glProjectRows]);
+  const removeGlProjectRow = useCallback((i) => {
+    const rows = glProjectRows.filter((_, j) => j !== i);
+    setGlProject(rows.length ? rows.join(', ') : '');
+  }, [glProjectRows]);
+
   // Jira usernames derived from mapping (or fallback to associateList itself)
   const jiraUsernames = useMemo(() => {
     if (userMapping.length) return userMapping.map(m => m.jira).filter(Boolean);
@@ -599,10 +638,15 @@ export default function App() {
   const handleFetchGitHub = useCallback(async () => {
     setGhError(null); setGhLoading(true); setGhFetched(false);
     try {
+      const isMulti = ghRepoList.length > 1;
       const [contribs, rawCommits, prMeta] = await Promise.all([
-        fetchContributors(token, ghRepo),
-        fetchCommits(token, ghRepo, associateList, since, until),
-        fetchPRMetrics(token, ghRepo, associateList, since, until).catch(() => ({})),
+        isMulti ? fetchMultiRepoContributors(token, ghRepoList)
+                : fetchContributors(token, ghRepoList[0]),
+        isMulti ? fetchMultiRepoCommits(token, ghRepoList, associateList, since, until)
+                : fetchCommits(token, ghRepoList[0], associateList, since, until),
+        (isMulti ? fetchMultiRepoPRMetrics(token, ghRepoList, associateList, since, until)
+                 : fetchPRMetrics(token, ghRepoList[0], associateList, since, until)
+        ).catch(() => ({})),
       ]);
       const relevantLogins = new Set(associateList.map(a => a.toLowerCase()));
       setContributors(
@@ -645,7 +689,9 @@ export default function App() {
       if (needsRefetch.length > 0 && !prMeta._rateLimited) {
         const resolvedLogins = needsRefetch.map(r => r.resolved);
         try {
-          const retried = await fetchPRMetrics(token, ghRepo, resolvedLogins, since, until);
+          const retried = isMulti
+            ? await fetchMultiRepoPRMetrics(token, ghRepoList, resolvedLogins, since, until)
+            : await fetchPRMetrics(token, ghRepoList[0], resolvedLogins, since, until);
           for (const { original, resolved } of needsRefetch) {
             if (retried[resolved] || retried[resolved.toLowerCase()]) {
               mergedPr[original] = retried[resolved] || retried[resolved.toLowerCase()];
@@ -687,7 +733,7 @@ export default function App() {
       setSelectedAuthors([]); setGhFetched(true);
     } catch (e) { setGhError(e.message); }
     finally { setGhLoading(false); }
-  }, [token, ghRepo, associateList, since, until]);
+  }, [token, ghRepo, ghRepoList, associateList, since, until]);
 
   // ── Jira test connection ──────────────────────────────────────────────────
   const [jiraTestStatus, setJiraTestStatus] = useState(null); // null | 'ok' | 'error'
@@ -770,9 +816,13 @@ export default function App() {
   const handleFetchGitLab = useCallback(async () => {
     setGlError(null); setGlLoading(true); setGlFetched(false);
     try {
+      const isMulti = glProjectList.length > 1;
       const [rawCommits, mrMeta] = await Promise.all([
-        fetchGitLabCommits(glUrl, glToken, glProject, glUsernames, since, until),
-        fetchGitLabMRMetrics(glUrl, glToken, glProject, glUsernames, since, until).catch(() => ({})),
+        isMulti ? fetchMultiProjectCommits(glUrl, glToken, glProjectList, glUsernames, since, until)
+                : fetchGitLabCommits(glUrl, glToken, glProjectList[0], glUsernames, since, until),
+        (isMulti ? fetchMultiProjectMRMetrics(glUrl, glToken, glProjectList, glUsernames, since, until)
+                 : fetchGitLabMRMetrics(glUrl, glToken, glProjectList[0], glUsernames, since, until)
+        ).catch(() => ({})),
       ]);
       const sortedGlCommits = rawCommits.sort((a, b) => new Date(b.date) - new Date(a.date));
       setGlCommits(sortedGlCommits);
@@ -787,7 +837,7 @@ export default function App() {
       setGlPage(1); setGlFetched(true);
     } catch (e) { setGlError(e.message); }
     finally { setGlLoading(false); }
-  }, [glUrl, glToken, glProject, glUsernames, associates, since, until]);
+  }, [glUrl, glToken, glProject, glProjectList, glUsernames, associates, since, until]);
 
   // ── Fetch everything at once ──────────────────────────────────────────────
   const fetchAllLoading = ghLoading || jiraLoading || glLoading;
@@ -922,13 +972,13 @@ export default function App() {
   }, [filteredCommits]);
 
   const openDayOnGitHub = useCallback((isoDate) => {
-    if (!isoDate) return;
+    if (!isoDate || !ghRepoList.length) return;
     const authors = selectedAuthors.length === 1 ? `&author=${selectedAuthors[0]}` : '';
     window.open(
-      `https://github.com/${ghRepo}/commits/main/?since=${isoDate}T00:00:00Z&until=${isoDate}T23:59:59Z${authors}`,
+      `https://github.com/${ghRepoList[0]}/commits/main/?since=${isoDate}T00:00:00Z&until=${isoDate}T23:59:59Z${authors}`,
       '_blank', 'noreferrer'
     );
-  }, [selectedAuthors]);
+  }, [ghRepoList, selectedAuthors]);
 
   // ── GitLab derived data ─────────────────────────────────────────────────
 
@@ -1768,9 +1818,23 @@ export default function App() {
                   )}
                 </div>
                 <div className="field">
-                  <label>Repository</label>
-                  <input className="input" type="text" placeholder="owner/repo  (e.g. octocat/hello-world)" value={ghRepo} onChange={e => setGhRepo(e.target.value)} />
-                  <span className="token-hint">Full repo path as <code>owner/name</code> — commits, PRs, and contributors are fetched from this repo</span>
+                  <label>Repositories</label>
+                  {ghRepoRows.map((repo, i) => (
+                    <div key={i} style={{ display:'flex', gap:6, marginBottom:4 }}>
+                      <input className="input" type="text" placeholder="owner/repo" value={repo}
+                        style={{ flex:1 }}
+                        onChange={e => setGhRepoRow(i, e.target.value)} />
+                      {(ghRepoRows.length > 1 || repo) && (
+                        <button className="btn btn-outline" style={{ padding:'4px 10px', fontSize:12, flexShrink:0 }}
+                          onClick={() => removeGhRepoRow(i)} title="Remove repo">✕</button>
+                      )}
+                    </div>
+                  ))}
+                  <button className="btn btn-outline" style={{ padding:'3px 12px', fontSize:12, alignSelf:'flex-start', marginTop:2 }}
+                    onClick={addGhRepoRow}>
+                    + Add repo
+                  </button>
+                  <span className="token-hint">Each row is an <code>owner/name</code> path — data from all repos is merged.</span>
                 </div>
                 <div className="field">
                   <label>Associate GitHub Usernames</label>
@@ -1846,9 +1910,23 @@ export default function App() {
                   </span>
                 </div>
                 <div className="field">
-                  <label>Project Path</label>
-                  <input className="input" type="text" placeholder="group/project" value={glProject} onChange={e => setGlProject(e.target.value)} />
-                  <span className="token-hint">The full path as shown in the URL, e.g. <code>my-group/my-project</code></span>
+                  <label>Project Paths</label>
+                  {glProjectRows.map((proj, i) => (
+                    <div key={i} style={{ display:'flex', gap:6, marginBottom:4 }}>
+                      <input className="input" type="text" placeholder="group/project" value={proj}
+                        style={{ flex:1 }}
+                        onChange={e => setGlProjectRow(i, e.target.value)} />
+                      {(glProjectRows.length > 1 || proj) && (
+                        <button className="btn btn-outline" style={{ padding:'4px 10px', fontSize:12, flexShrink:0 }}
+                          onClick={() => removeGlProjectRow(i)} title="Remove project">✕</button>
+                      )}
+                    </div>
+                  ))}
+                  <button className="btn btn-outline" style={{ padding:'3px 12px', fontSize:12, alignSelf:'flex-start', marginTop:2 }}
+                    onClick={addGlProjectRow}>
+                    + Add project
+                  </button>
+                  <span className="token-hint">Each row is a project path as shown in the URL — data from all projects is merged.</span>
                 </div>
                 <div className="field" style={{ alignSelf:'end' }}>
                   <button className="btn btn-outline" onClick={handleTestGitLab} style={{ marginBottom:8, width:'100%' }}>
@@ -2095,7 +2173,7 @@ export default function App() {
                 <p>Enter your GitHub token and click "Fetch GitHub"</p>
               </div>
             )}
-            {ghLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from {ghRepo || 'GitHub'}…</div>}
+            {ghLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from {ghRepoList.length > 1 ? `${ghRepoList.length} GitHub repos` : ghRepoList[0] || 'GitHub'}…</div>}
 
             {ghFetched && !ghLoading && ghCacheTs && (
               <div className="alert" style={{ background:'var(--surface)', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:13, marginBottom:8 }}>
@@ -2166,7 +2244,7 @@ export default function App() {
                             <span className="day-hover-count">{hoveredDay.commits} commit{hoveredDay.commits !== 1 ? 's' : ''}</span>
                             {hoveredDay.commits > 0 && (
                               <a className="day-hover-link"
-                                href={`https://github.com/${ghRepo}/commits/main/?since=${hoveredDay.isoDate}T00:00:00Z&until=${hoveredDay.isoDate}T23:59:59Z${selectedAuthors.length===1?`&author=${selectedAuthors[0]}`:''}`}
+                                href={`https://github.com/${ghRepoList[0] || ''}/commits/main/?since=${hoveredDay.isoDate}T00:00:00Z&until=${hoveredDay.isoDate}T23:59:59Z${selectedAuthors.length===1?`&author=${selectedAuthors[0]}`:''}`}
                                 target="_blank" rel="noreferrer">
                                 View on GitHub ↗
                               </a>
@@ -2276,7 +2354,7 @@ export default function App() {
                       )}
                       {!prFetchNote && totalPRs === 0 && (
                         <div className="alert" style={{ marginTop:8, background:'var(--surface)', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:13 }}>
-                          No PRs found for <strong style={{ color:'var(--text)' }}>{prRows.map(r=>r.displayName).join(', ')}</strong> in {since}–{until} in <code>{ghRepo}</code>.
+                          No PRs found for <strong style={{ color:'var(--text)' }}>{prRows.map(r=>r.displayName).join(', ')}</strong> in {since}–{until} in <code>{ghRepoList.join(', ')}</code>.
                           Verify the GitHub usernames in the mapping table match their GitHub accounts, and that the date range covers their activity.
                         </div>
                       )}

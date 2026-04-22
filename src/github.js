@@ -294,6 +294,97 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
   return metrics;
 }
 
+// ── Multi-repo wrappers ──────────────────────────────────────────────────────
+
+function parseRepoList(input) {
+  if (Array.isArray(input)) return input.map(r => r.trim()).filter(Boolean);
+  return (input || '').split(',').map(r => r.trim()).filter(Boolean);
+}
+
+export async function fetchMultiRepoContributors(token, repos) {
+  const repoList = parseRepoList(repos);
+  const merged = new Map();
+  for (const repo of repoList) {
+    const contribs = await fetchContributors(token, repo);
+    for (const c of contribs) {
+      const key = c.login.toLowerCase();
+      const existing = merged.get(key);
+      if (existing) {
+        existing.totalContributions += c.totalContributions;
+      } else {
+        merged.set(key, { ...c });
+      }
+    }
+  }
+  return [...merged.values()].sort((a, b) => b.totalContributions - a.totalContributions);
+}
+
+export async function fetchMultiRepoCommits(token, repos, authors = [], since = null, until = null) {
+  const repoList = parseRepoList(repos);
+  let allCommits = [];
+  for (const repo of repoList) {
+    const commits = await fetchCommits(token, repo, authors, since, until);
+    allCommits = allCommits.concat(commits);
+  }
+  const seen = new Set();
+  return allCommits.filter(c => {
+    if (seen.has(c.sha)) return false;
+    seen.add(c.sha);
+    return true;
+  });
+}
+
+export async function fetchMultiRepoPRMetrics(token, repos, authors = [], since = null, until = null) {
+  const repoList = parseRepoList(repos);
+  const merged = {};
+  let anyRateLimited = false;
+
+  for (const repo of repoList) {
+    const metrics = await fetchPRMetrics(token, repo, authors, since, until);
+    if (metrics._rateLimited) anyRateLimited = true;
+
+    for (const [login, data] of Object.entries(metrics)) {
+      if (login === '_rateLimited') continue;
+      const existing = merged[login];
+      if (!existing || existing._rateLimited) {
+        merged[login] = { ...data };
+      } else if (data && !data._rateLimited) {
+        existing.prsOpened      += data.prsOpened ?? 0;
+        existing.prsMerged      += data.prsMerged ?? 0;
+        existing.prsReviewed    += data.prsReviewed ?? 0;
+        existing.prsChurned     += data.prsChurned ?? 0;
+        existing.reviewComments += data.reviewComments ?? 0;
+        existing.authoredPRs = (existing.authoredPRs ?? []).concat(data.authoredPRs ?? []);
+        existing.reviewedPRs = (existing.reviewedPRs ?? []).concat(data.reviewedPRs ?? []);
+        const allCycles = [];
+        if (existing.avgCycleTimeDays != null) allCycles.push(existing.avgCycleTimeDays);
+        if (data.avgCycleTimeDays != null) allCycles.push(data.avgCycleTimeDays);
+        existing.avgCycleTimeDays = allCycles.length
+          ? Math.round(allCycles.reduce((a, b) => a + b, 0) / allCycles.length * 10) / 10
+          : null;
+        const allLines = [];
+        if (existing.avgLinesChanged != null) allLines.push(existing.avgLinesChanged);
+        if (data.avgLinesChanged != null) allLines.push(data.avgLinesChanged);
+        existing.avgLinesChanged = allLines.length
+          ? Math.round(allLines.reduce((a, b) => a + b, 0) / allLines.length)
+          : null;
+        const allFiles = [];
+        if (existing.avgFilesChanged != null) allFiles.push(existing.avgFilesChanged);
+        if (data.avgFilesChanged != null) allFiles.push(data.avgFilesChanged);
+        existing.avgFilesChanged = allFiles.length
+          ? Math.round(allFiles.reduce((a, b) => a + b, 0) / allFiles.length * 10) / 10
+          : null;
+        existing.churnPct = existing.prsOpened > 0
+          ? Math.round((existing.prsChurned / existing.prsOpened) * 100)
+          : 0;
+      }
+    }
+  }
+
+  merged._rateLimited = anyRateLimited;
+  return merged;
+}
+
 export async function fetchContributorStats(token, repoFullName) {
   const { owner, name } = parseRepo(repoFullName);
   const url = `${BASE_URL}/repos/${owner}/${name}/stats/contributors`;
