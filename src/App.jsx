@@ -20,82 +20,69 @@ import {
 import './App.css';
 
 const GH_CACHE_KEY = 'gh_cache';
-
-function ghCacheKey(repo, associates) {
-  return `${repo}|${associates}`;
-}
-
-function loadGhCache(repo, associates) {
-  try {
-    const raw = localStorage.getItem(GH_CACHE_KEY);
-    if (!raw) { console.log('[cache] No GitHub cache found'); return null; }
-    const cache = JSON.parse(raw);
-    const expected = ghCacheKey(repo, associates);
-    if (cache.key !== expected) {
-      console.log('[cache] GitHub cache key mismatch', { cached: cache.key, expected });
-      return null;
-    }
-    console.log(`[cache] Restored GitHub data from ${new Date(cache.ts).toLocaleString()}`);
-    return cache;
-  } catch (e) { console.warn('[cache] Failed to load GitHub cache:', e.message); return null; }
-}
-
-function saveGhCache(repo, since, until, associates, contributors, commits, prMetrics) {
-  try {
-    const cache = {
-      key: ghCacheKey(repo, associates),
-      ts: Date.now(),
-      since, until,
-      contributors,
-      commits,
-      prMetrics,
-    };
-    const json = JSON.stringify(cache);
-    localStorage.setItem(GH_CACHE_KEY, json);
-    console.log(`[cache] Saved GitHub data (${(json.length / 1024).toFixed(0)} KB)`);
-  } catch (e) {
-    console.warn('[cache] Failed to save GitHub data:', e.message);
-    try { localStorage.removeItem(GH_CACHE_KEY); } catch {}
-  }
-}
-
 const JIRA_CACHE_KEY = 'jira_cache';
+const GL_CACHE_KEY = 'gl_cache';
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const CACHE_MAX_BYTES = 4 * 1024 * 1024; // 4 MB per entry
 
-function jiraCacheKey(base, usernames) {
-  return `${base}|${usernames}`;
+const cacheLog = import.meta.env.DEV ? console.log.bind(console) : () => {};
+const cacheWarn = import.meta.env.DEV ? console.warn.bind(console) : () => {};
+
+function normAssociateKey(raw) {
+  return (raw || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean).sort().join(',');
 }
 
-function loadJiraCache(base, usernames) {
+function loadCache(storageKey, expectedKey) {
   try {
-    const raw = localStorage.getItem(JIRA_CACHE_KEY);
-    if (!raw) { console.log('[cache] No Jira cache found'); return null; }
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) { cacheLog(`[cache] No ${storageKey} cache found`); return null; }
     const cache = JSON.parse(raw);
-    const expected = jiraCacheKey(base, usernames);
-    if (cache.key !== expected) {
-      console.log('[cache] Jira cache key mismatch', { cached: cache.key, expected });
+    if (cache.key !== expectedKey) {
+      cacheLog(`[cache] ${storageKey} key mismatch`, { cached: cache.key, expected: expectedKey });
       return null;
     }
-    console.log(`[cache] Restored Jira data from ${new Date(cache.ts).toLocaleString()}`);
+    const age = Date.now() - (cache.ts || 0);
+    if (age > CACHE_TTL_MS) {
+      cacheLog(`[cache] ${storageKey} expired (${(age / 3600000).toFixed(1)}h old)`);
+      try { localStorage.removeItem(storageKey); } catch {}
+      return null;
+    }
+    cacheLog(`[cache] Restored ${storageKey} from ${new Date(cache.ts).toLocaleString()}`);
     return cache;
-  } catch (e) { console.warn('[cache] Failed to load Jira cache:', e.message); return null; }
+  } catch (e) { cacheWarn(`[cache] Failed to load ${storageKey}:`, e.message); return null; }
 }
 
-function saveJiraCache(base, usernames, since, until, issues, remoteLinks) {
+function saveCache(storageKey, data) {
   try {
-    const cache = {
-      key: jiraCacheKey(base, usernames),
-      ts: Date.now(),
-      since, until,
-      issues,
-      remoteLinks,
-    };
-    const json = JSON.stringify(cache);
-    localStorage.setItem(JIRA_CACHE_KEY, json);
-    console.log(`[cache] Saved Jira data (${(json.length / 1024).toFixed(0)} KB)`);
+    const json = JSON.stringify(data);
+    if (json.length > CACHE_MAX_BYTES) {
+      cacheWarn(`[cache] ${storageKey} too large (${(json.length / 1024).toFixed(0)} KB > ${CACHE_MAX_BYTES / 1024} KB limit), skipping save`);
+      return;
+    }
+    localStorage.setItem(storageKey, json);
+    cacheLog(`[cache] Saved ${storageKey} (${(json.length / 1024).toFixed(0)} KB)`);
   } catch (e) {
-    console.warn('[cache] Failed to save Jira data:', e.message);
-    try { localStorage.removeItem(JIRA_CACHE_KEY); } catch {}
+    cacheWarn(`[cache] Failed to save ${storageKey}:`, e.message);
+    try { localStorage.removeItem(storageKey); } catch {}
   }
+}
+
+function stripPRListsForCache(prMetrics) {
+  const slim = {};
+  for (const [k, v] of Object.entries(prMetrics)) {
+    if (k === '_rateLimited') { slim[k] = v; continue; }
+    if (v && typeof v === 'object') {
+      const { authoredPRs, reviewedPRs, ...rest } = v;
+      slim[k] = rest;
+    } else { slim[k] = v; }
+  }
+  return slim;
+}
+
+function clearAllCaches() {
+  try { localStorage.removeItem(GH_CACHE_KEY); } catch {}
+  try { localStorage.removeItem(JIRA_CACHE_KEY); } catch {}
+  try { localStorage.removeItem(GL_CACHE_KEY); } catch {}
 }
 
 const COLORS = ['#58a6ff','#3fb950','#f78166','#d2a8ff','#ffa657','#39d353','#ff7b72','#79c0ff','#56d364','#e3b341'];
@@ -375,7 +362,8 @@ export default function App() {
 
   // ── Restore caches on load ──
   useEffect(() => {
-    const ghCache = loadGhCache(ghRepo, associates);
+    const ghKey = `${ghRepo}|${normAssociateKey(associates)}`;
+    const ghCache = loadCache(GH_CACHE_KEY, ghKey);
     if (ghCache) {
       setContributors(ghCache.contributors ?? []);
       setCommits(ghCache.commits ?? []);
@@ -385,7 +373,16 @@ export default function App() {
       if (ghCache.since) setSinceDate(parseISO(ghCache.since));
       if (ghCache.until) setUntilDate(parseISO(ghCache.until));
     }
-    const jCache = loadJiraCache(jiraBase, jiraUsernames.join(','));
+
+    // Derive jiraUsernames stably from localStorage at mount (avoids
+    // dependency on the useMemo which hasn't run yet)
+    const savedMapping = (() => { try { return JSON.parse(localStorage.getItem('user_mapping') || '[]'); } catch { return []; } })();
+    const assocList = (associates || '').split(',').map(s => s.trim()).filter(Boolean);
+    const jiraUsers = savedMapping.length
+      ? savedMapping.map(m => m.jira).filter(Boolean)
+      : assocList;
+    const jiraKey = `${jiraBase}|${normAssociateKey(jiraUsers.join(','))}`;
+    const jCache = loadCache(JIRA_CACHE_KEY, jiraKey);
     if (jCache) {
       setJiraIssues(jCache.issues ?? []);
       setRemoteLinks(jCache.remoteLinks ?? {});
@@ -394,6 +391,19 @@ export default function App() {
       if (!ghCache) {
         if (jCache.since) setSinceDate(parseISO(jCache.since));
         if (jCache.until) setUntilDate(parseISO(jCache.until));
+      }
+    }
+
+    const glKey = `${glUrl}|${glProject}|${normAssociateKey(associates)}`;
+    const glCache = loadCache(GL_CACHE_KEY, glKey);
+    if (glCache) {
+      setGlCommits(glCache.commits ?? []);
+      setGlMRMetrics(glCache.mrMetrics ?? {});
+      setGlCacheTs(glCache.ts);
+      setGlFetched(true);
+      if (!ghCache && !jCache) {
+        if (glCache.since) setSinceDate(parseISO(glCache.since));
+        if (glCache.until) setUntilDate(parseISO(glCache.until));
       }
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -426,6 +436,7 @@ export default function App() {
   const [glLoading,    setGlLoading]    = useState(false);
   const [glError,      setGlError]      = useState(null);
   const [glFetched,    setGlFetched]    = useState(false);
+  const [glCacheTs,    setGlCacheTs]    = useState(null);
   const [glSearchMsg,  setGlSearchMsg]  = useState('');
   const [glPage,       setGlPage]       = useState(1);
   const [glTestStatus, setGlTestStatus] = useState(null);
@@ -657,7 +668,13 @@ export default function App() {
       const filteredContribs = associateList.length > 0
         ? contribs.filter(c => relevantLogins.has(c.login.toLowerCase()))
         : contribs.slice(0, 20);
-      saveGhCache(ghRepo, since, until, associates, filteredContribs, rawCommits.sort((a, b) => new Date(b.date) - new Date(a.date)), normalizedPr);
+      saveCache(GH_CACHE_KEY, {
+        key: `${ghRepo}|${normAssociateKey(associates)}`,
+        ts: Date.now(), since, until,
+        contributors: filteredContribs,
+        commits: rawCommits.sort((a, b) => new Date(b.date) - new Date(a.date)),
+        prMetrics: stripPRListsForCache(normalizedPr),
+      });
       setGhCacheTs(null);
 
       if (mergedPr._rateLimited) {
@@ -717,13 +734,18 @@ export default function App() {
       const issues = raw.map(i => normaliseIssue(i, spField));
       setJiraIssues(issues);
       const keys = issues.map(i => i.key);
+      const jiraCacheData = (links) => ({
+        key: `${jiraBase}|${normAssociateKey(jiraUsernames.join(','))}`,
+        ts: Date.now(), since, until,
+        issues, remoteLinks: links,
+      });
       fetchRemoteLinksForIssues(jiraBase, jiraApiKey, jiraEmail, keys)
         .then(links => {
           setRemoteLinks(links);
-          saveJiraCache(jiraBase, jiraUsernames.join(','), since, until, issues, links);
+          saveCache(JIRA_CACHE_KEY, jiraCacheData(links));
         })
         .catch(() => {
-          saveJiraCache(jiraBase, jiraUsernames.join(','), since, until, issues, {});
+          saveCache(JIRA_CACHE_KEY, jiraCacheData({}));
         });
       setJiraCacheTs(null);
       setJiraPage(1); setJiraFetched(true);
@@ -752,12 +774,20 @@ export default function App() {
         fetchGitLabCommits(glUrl, glToken, glProject, glUsernames, since, until),
         fetchGitLabMRMetrics(glUrl, glToken, glProject, glUsernames, since, until).catch(() => ({})),
       ]);
-      setGlCommits(rawCommits.sort((a, b) => new Date(b.date) - new Date(a.date)));
+      const sortedGlCommits = rawCommits.sort((a, b) => new Date(b.date) - new Date(a.date));
+      setGlCommits(sortedGlCommits);
       setGlMRMetrics(mrMeta);
+      saveCache(GL_CACHE_KEY, {
+        key: `${glUrl}|${glProject}|${normAssociateKey(associates)}`,
+        ts: Date.now(), since, until,
+        commits: sortedGlCommits,
+        mrMetrics: mrMeta,
+      });
+      setGlCacheTs(null);
       setGlPage(1); setGlFetched(true);
     } catch (e) { setGlError(e.message); }
     finally { setGlLoading(false); }
-  }, [glUrl, glToken, glProject, glUsernames, since, until]);
+  }, [glUrl, glToken, glProject, glUsernames, associates, since, until]);
 
   // ── Fetch everything at once ──────────────────────────────────────────────
   const fetchAllLoading = ghLoading || jiraLoading || glLoading;
@@ -1847,13 +1877,17 @@ export default function App() {
                     <span style={{ fontSize:12, color:'var(--accent2)', fontWeight:500, transition:'opacity .3s' }}>✓ Saved</span>
                   )}
                 </div>
-                <div style={{ display:'flex', gap:6 }}>
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
                   <button className="btn btn-outline" style={{ padding:'4px 12px', fontSize:12 }} onClick={addMappingRow}>+ Add row</button>
                   <button className="btn btn-outline" style={{ padding:'4px 12px', fontSize:12 }} onClick={handleExportConfig} title="Download all settings as a JSON file">↓ Export config</button>
                   <label className="btn btn-outline" style={{ padding:'4px 12px', fontSize:12, cursor:'pointer' }} title="Restore settings from a previously exported JSON file">
                     ↑ Import config
                     <input type="file" accept=".json" style={{ display:'none' }} onChange={handleImportConfig} />
                   </label>
+                  <button className="btn btn-error-outline" style={{ padding:'4px 12px', fontSize:12 }} title="Remove all cached GitHub, Jira, and GitLab data"
+                    onClick={() => { clearAllCaches(); setGhCacheTs(null); setJiraCacheTs(null); setGlCacheTs(null); }}>
+                    Clear Cache
+                  </button>
                 </div>
               </div>
               <p style={{ margin:'0 0 12px', fontSize:12, color:'var(--text-muted)' }}>
@@ -2472,6 +2506,13 @@ export default function App() {
               </div>
             )}
             {glLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from GitLab…</div>}
+
+            {glFetched && !glLoading && glCacheTs && (
+              <div className="alert" style={{ background:'var(--surface)', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:13, marginBottom:8 }}>
+                Showing cached data from {new Date(glCacheTs).toLocaleString()}.{' '}
+                <button className="btn btn-outline" style={{ padding:'2px 10px', fontSize:12 }} onClick={handleFetchGitLab}>Refresh</button>
+              </div>
+            )}
 
             {glFetched && !glLoading && (
               <>
