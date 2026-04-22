@@ -52,16 +52,24 @@ function loadCache(storageKey, expectedKey) {
   } catch (e) { cacheWarn(`[cache] Failed to load ${storageKey}:`, e.message); return null; }
 }
 
-function saveCache(storageKey, data) {
+function saveCache(storageKey, data, fallbackData = null) {
   try {
     const json = JSON.stringify(data);
     if (json.length > CACHE_MAX_BYTES) {
+      if (fallbackData) {
+        cacheWarn(`[cache] ${storageKey} full payload too large (${(json.length / 1024).toFixed(0)} KB), saving without PR lists`);
+        return saveCache(storageKey, fallbackData);
+      }
       cacheWarn(`[cache] ${storageKey} too large (${(json.length / 1024).toFixed(0)} KB > ${CACHE_MAX_BYTES / 1024} KB limit), skipping save`);
       return;
     }
     localStorage.setItem(storageKey, json);
     cacheLog(`[cache] Saved ${storageKey} (${(json.length / 1024).toFixed(0)} KB)`);
   } catch (e) {
+    if (fallbackData) {
+      cacheWarn(`[cache] ${storageKey} save failed, retrying without PR lists`);
+      return saveCache(storageKey, fallbackData);
+    }
     cacheWarn(`[cache] Failed to save ${storageKey}:`, e.message);
     try { localStorage.removeItem(storageKey); } catch {}
   }
@@ -714,13 +722,16 @@ export default function App() {
       const filteredContribs = associateList.length > 0
         ? contribs.filter(c => relevantLogins.has(c.login.toLowerCase()))
         : contribs.slice(0, 20);
-      saveCache(GH_CACHE_KEY, {
+      const cachePayload = {
         key: `${ghRepo}|${normAssociateKey(associates)}`,
         ts: Date.now(), since, until,
         contributors: filteredContribs,
         commits: rawCommits.sort((a, b) => new Date(b.date) - new Date(a.date)),
-        prMetrics: stripPRListsForCache(normalizedPr),
-      });
+      };
+      saveCache(GH_CACHE_KEY,
+        { ...cachePayload, prMetrics: normalizedPr },
+        { ...cachePayload, prMetrics: stripPRListsForCache(normalizedPr) },
+      );
       setGhCacheTs(null);
 
       if (mergedPr._rateLimited) {
