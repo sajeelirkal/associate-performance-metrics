@@ -23,10 +23,10 @@
 - **GitHub Tab** — Commits, contributors, PR activity (opened / merged / reviewed), PR churn & cycle time charts, PR complexity metrics (avg lines/files per PR), browsable authored & reviewed PR lists with search and pagination, weekly commit breakdowns, and contribution share
 - **GitLab Tab** — Merge requests, commit tracking, review notes, and activity breakdowns across projects
 - **Jira Tab** — Issues, sprint spillovers, cycle time, story points, status transitions, per-associate filtering, and search
-- **Performance Tab** — Unified metrics across all platforms, per-associate scorecards, relative radar chart, 1:1 associate deep-dive, full summary table with PR complexity data, and configurable ranking weights
+- **Performance Tab** — Unified metrics across all platforms, per-associate scorecards, relative radar chart, 1:1 associate deep-dive, and full summary table with PR complexity data
 - **Work Summary & CSV Export** — Per-associate work summary combining commits and Jira issues, exportable as CSV for offline review
 - **Settings Tab** — GitHub OAuth / PAT, Jira Cloud & Data Center config, GitLab self-managed support, date range picker, GitHub-Jira username mapping, single "Fetch All" button
-- **Performance Ranking** — Configurable composite scoring with preset profiles (Balanced, Code Output, Review Focus, Delivery Speed, Custom) and individual slider adjustments for ranking weights
+- **Performance Ranking** *(planned)* — Configurable composite scoring with preset profiles (Balanced, Code Output, Review Focus, Delivery Speed, Custom) and individual slider adjustments for ranking weights
 - **Multi-Repository Support** — Configure multiple GitHub repositories and GitLab projects via add/remove row inputs; data from all repos/projects is merged into a single unified view
 - **Parallel Fetching** — Bounded-concurrency workers (5 for GitHub, 3 for GitLab) fetch repos/projects in parallel with phased progress UI; inactive repos are skipped for PR metrics; authenticated requests use reduced API throttle
 - **Smart Caching** — localStorage-based caching with 12-hour TTL and 4 MB size guard per entry; cache banners show data freshness with one-click refresh; Clear Cache button in Settings
@@ -265,9 +265,11 @@ When working with many repositories (40+), several optimizations keep fetch time
 
 ---
 
-## Performance Ranking
+## Performance Ranking (Planned)
 
-The Performance tab uses a **configurable composite score** to rank associates. Weights are adjustable per-metric and can be saved across sessions.
+> **Future improvement** — not yet implemented.
+
+The Performance tab will support a **configurable composite score** to rank associates, with adjustable per-metric weights saved across sessions.
 
 | Preset | Focus |
 | --- | --- |
@@ -277,7 +279,7 @@ The Performance tab uses a **configurable composite score** to rank associates. 
 | **Delivery Speed** | Emphasises cycle time and merge rate |
 | **Custom** | Fully manual slider control |
 
-Each factor (commits, PRs opened, PRs merged, PRs reviewed, review comments, cycle time, churn %) has an individual weight slider (0–100). Changing any slider automatically switches the preset to **Custom**. Weights are persisted in `localStorage`.
+Each factor (commits, PRs opened, PRs merged, PRs reviewed, review comments, cycle time, churn %) will have an individual weight slider (0–100). Changing any slider will automatically switch the preset to **Custom**. Weights will be persisted in `localStorage`.
 
 ---
 
