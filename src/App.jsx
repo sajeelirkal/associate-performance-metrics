@@ -357,6 +357,7 @@ export default function App() {
   const [prFetchNote,  setPrFetchNote]  = useState(''); // warning/info message after PR fetch
   const [demoMode,     setDemoMode]     = useState(false);
   const [ghLoading,    setGhLoading]    = useState(false);
+  const [ghProgress,   setGhProgress]   = useState(null);
   const [ghError,      setGhError]      = useState(null);
   const [ghFetched,    setGhFetched]    = useState(false);
   const [ghCacheTs,    setGhCacheTs]    = useState(null);
@@ -442,6 +443,7 @@ export default function App() {
   const [glCommits,    setGlCommits]    = useState([]);
   const [glMRMetrics,  setGlMRMetrics]  = useState({});
   const [glLoading,    setGlLoading]    = useState(false);
+  const [glProgress,   setGlProgress]   = useState(null);
   const [glError,      setGlError]      = useState(null);
   const [glFetched,    setGlFetched]    = useState(false);
   const [glCacheTs,    setGlCacheTs]    = useState(null);
@@ -644,18 +646,37 @@ export default function App() {
 
   // ── GitHub fetch ──────────────────────────────────────────────────────────
   const handleFetchGitHub = useCallback(async () => {
-    setGhError(null); setGhLoading(true); setGhFetched(false);
+    setGhError(null); setGhLoading(true); setGhFetched(false); setGhProgress(null);
     try {
       const isMulti = ghRepoList.length > 1;
-      const [contribs, rawCommits, prMeta] = await Promise.all([
-        isMulti ? fetchMultiRepoContributors(token, ghRepoList)
+      const mkProgress = (phase) => isMulti
+        ? (p) => setGhProgress({ ...p, phase })
+        : undefined;
+
+      const [contribs, rawCommits] = await Promise.all([
+        isMulti ? fetchMultiRepoContributors(token, ghRepoList, { onProgress: mkProgress('contributors') })
                 : fetchContributors(token, ghRepoList[0]),
-        isMulti ? fetchMultiRepoCommits(token, ghRepoList, associateList, since, until)
+        isMulti ? fetchMultiRepoCommits(token, ghRepoList, associateList, since, until, { onProgress: mkProgress('commits') })
                 : fetchCommits(token, ghRepoList[0], associateList, since, until),
-        (isMulti ? fetchMultiRepoPRMetrics(token, ghRepoList, associateList, since, until)
-                 : fetchPRMetrics(token, ghRepoList[0], associateList, since, until)
-        ).catch(() => ({})),
       ]);
+
+      let activeRepos = null;
+      if (isMulti) {
+        const reposWithActivity = new Set();
+        for (const c of rawCommits) {
+          const repo = ghRepoList.find(r => c.url?.includes(r));
+          if (repo) reposWithActivity.add(repo);
+        }
+        if (reposWithActivity.size > 0 && reposWithActivity.size < ghRepoList.length) {
+          activeRepos = reposWithActivity;
+        }
+        setGhProgress({ completed: 0, total: activeRepos?.size ?? ghRepoList.length, phase: 'PR metrics' });
+      }
+
+      const prMeta = await (
+        isMulti ? fetchMultiRepoPRMetrics(token, ghRepoList, associateList, since, until, { onProgress: mkProgress('PR metrics'), activeRepos })
+                : fetchPRMetrics(token, ghRepoList[0], associateList, since, until)
+      ).catch(() => ({}));
       const relevantLogins = new Set(associateList.map(a => a.toLowerCase()));
       setContributors(
         associateList.length > 0
@@ -698,7 +719,7 @@ export default function App() {
         const resolvedLogins = needsRefetch.map(r => r.resolved);
         try {
           const retried = isMulti
-            ? await fetchMultiRepoPRMetrics(token, ghRepoList, resolvedLogins, since, until)
+            ? await fetchMultiRepoPRMetrics(token, ghRepoList, resolvedLogins, since, until, { activeRepos })
             : await fetchPRMetrics(token, ghRepoList[0], resolvedLogins, since, until);
           for (const { original, resolved } of needsRefetch) {
             if (retried[resolved] || retried[resolved.toLowerCase()]) {
@@ -743,7 +764,7 @@ export default function App() {
       }
       setSelectedAuthors([]); setGhFetched(true);
     } catch (e) { setGhError(e.message); }
-    finally { setGhLoading(false); }
+    finally { setGhLoading(false); setGhProgress(null); }
   }, [token, ghRepo, ghRepoList, associateList, since, until]);
 
   // ── Jira test connection ──────────────────────────────────────────────────
@@ -825,13 +846,16 @@ export default function App() {
 
   // ── GitLab fetch ──────────────────────────────────────────────────────
   const handleFetchGitLab = useCallback(async () => {
-    setGlError(null); setGlLoading(true); setGlFetched(false);
+    setGlError(null); setGlLoading(true); setGlFetched(false); setGlProgress(null);
     try {
       const isMulti = glProjectList.length > 1;
+      const mkProgress = (phase) => isMulti
+        ? (p) => setGlProgress({ ...p, phase })
+        : undefined;
       const [rawCommits, mrMeta] = await Promise.all([
-        isMulti ? fetchMultiProjectCommits(glUrl, glToken, glProjectList, glUsernames, since, until)
+        isMulti ? fetchMultiProjectCommits(glUrl, glToken, glProjectList, glUsernames, since, until, { onProgress: mkProgress('commits') })
                 : fetchGitLabCommits(glUrl, glToken, glProjectList[0], glUsernames, since, until),
-        (isMulti ? fetchMultiProjectMRMetrics(glUrl, glToken, glProjectList, glUsernames, since, until)
+        (isMulti ? fetchMultiProjectMRMetrics(glUrl, glToken, glProjectList, glUsernames, since, until, { onProgress: mkProgress('merge requests') })
                  : fetchGitLabMRMetrics(glUrl, glToken, glProjectList[0], glUsernames, since, until)
         ).catch(() => ({})),
       ]);
@@ -847,7 +871,7 @@ export default function App() {
       setGlCacheTs(null);
       setGlPage(1); setGlFetched(true);
     } catch (e) { setGlError(e.message); }
-    finally { setGlLoading(false); }
+    finally { setGlLoading(false); setGlProgress(null); }
   }, [glUrl, glToken, glProject, glProjectList, glUsernames, associates, since, until]);
 
   // ── Fetch everything at once ──────────────────────────────────────────────
@@ -1832,7 +1856,7 @@ export default function App() {
                   <label>Repositories</label>
                   {ghRepoRows.map((repo, i) => (
                     <div key={i} style={{ display:'flex', gap:6, marginBottom:4 }}>
-                      <input className="input" type="text" placeholder="owner/repo" value={repo}
+                      <input className="input" type="text" placeholder="org/repository" value={repo}
                         style={{ flex:1 }}
                         onChange={e => setGhRepoRow(i, e.target.value)} />
                       {(ghRepoRows.length > 1 || repo) && (
@@ -1845,7 +1869,7 @@ export default function App() {
                     onClick={addGhRepoRow}>
                     + Add repo
                   </button>
-                  <span className="token-hint">Each row is an <code>owner/name</code> path — data from all repos is merged.</span>
+                  <span className="token-hint">Each row is an <code>org/repository</code> path — data from all repos is merged.</span>
                 </div>
                 <div className="field">
                   <label>Associate GitHub Usernames</label>
@@ -2184,7 +2208,7 @@ export default function App() {
                 <p>Enter your GitHub token and click "Fetch GitHub"</p>
               </div>
             )}
-            {ghLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from {ghRepoList.length > 1 ? `${ghRepoList.length} GitHub repos` : ghRepoList[0] || 'GitHub'}…</div>}
+            {ghLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from {ghRepoList.length > 1 ? `${ghRepoList.length} GitHub repos` : ghRepoList[0] || 'GitHub'}…{ghProgress && <span style={{ display:'block', fontSize:12, color:'var(--text-muted)', marginTop:4 }}>{ghProgress.phase ? `${ghProgress.phase}: ` : ''}{ghProgress.completed} / {ghProgress.total} repos</span>}</div>}
 
             {ghFetched && !ghLoading && ghCacheTs && (
               <div className="alert" style={{ background:'var(--surface)', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:13, marginBottom:8 }}>
@@ -2594,7 +2618,7 @@ export default function App() {
                 <p>Configure your GitLab token and project in Settings, then click &quot;Fetch GitLab&quot;</p>
               </div>
             )}
-            {glLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from GitLab…</div>}
+            {glLoading && <div className="loading-overlay"><div className="spinner"/>Fetching from {glProjectList.length > 1 ? `${glProjectList.length} GitLab projects` : 'GitLab'}…{glProgress && <span style={{ display:'block', fontSize:12, color:'var(--text-muted)', marginTop:4 }}>{glProgress.phase ? `${glProgress.phase}: ` : ''}{glProgress.completed} / {glProgress.total} projects</span>}</div>}
 
             {glFetched && !glLoading && glCacheTs && (
               <div className="alert" style={{ background:'var(--surface)', border:'1px solid var(--border)', color:'var(--text-muted)', fontSize:13, marginBottom:8 }}>

@@ -114,9 +114,8 @@ def http_500(e: Exception) -> HTTPException:
         return HTTPException(
             status_code=503,
             detail=(
-                "Unable to reach the server. If this host is behind a VPN "
-                "(e.g. Red Hat VPN), please make sure you are connected to "
-                "the VPN and try again."
+                "Unable to reach the server. If this host is behind a VPN, "
+                "please make sure you are connected and try again."
             ),
         )
     return HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}\n\n{tb}")
@@ -347,7 +346,7 @@ ISSUE_FIELDS_BASE = [
 
 # Well-known custom field IDs for story points across Jira instances
 SP_CANDIDATE_FIELDS = [
-    "customfield_10028",     # "Story Points" (Red Hat / common)
+    "customfield_10028",     # "Story Points" (common Jira instances)
     "story_points",          # native field (newer Jira Cloud)
     "customfield_10016",     # "Story point estimate" (Jira Cloud default)
     "customfield_10506",     # "DEV Story Points"
@@ -355,7 +354,7 @@ SP_CANDIDATE_FIELDS = [
     "customfield_10572",     # "QE Story Points"
     "customfield_10977",     # "Original story points"
     "customfield_10004",     # some instances
-    "customfield_12310243",  # Red Hat Jira (legacy)
+    "customfield_12310243",  # legacy Jira Data Center instances
 ]
 
 

@@ -23,9 +23,12 @@
 - **GitHub Tab** — Commits, contributors, PR activity (opened / merged / reviewed), PR churn & cycle time charts, PR complexity metrics (avg lines/files per PR), browsable authored & reviewed PR lists with search and pagination, weekly commit breakdowns, and contribution share
 - **GitLab Tab** — Merge requests, commit tracking, review notes, and activity breakdowns across projects
 - **Jira Tab** — Issues, sprint spillovers, cycle time, story points, status transitions, per-associate filtering, and search
-- **Performance Tab** — Unified metrics across all platforms, per-associate scorecards, relative radar chart, 1:1 associate deep-dive, and full summary table with PR complexity data
+- **Performance Tab** — Unified metrics across all platforms, per-associate scorecards, relative radar chart, 1:1 associate deep-dive, full summary table with PR complexity data, and configurable ranking weights
+- **Work Summary & CSV Export** — Per-associate work summary combining commits and Jira issues, exportable as CSV for offline review
 - **Settings Tab** — GitHub OAuth / PAT, Jira Cloud & Data Center config, GitLab self-managed support, date range picker, GitHub-Jira username mapping, single "Fetch All" button
+- **Performance Ranking** — Configurable composite scoring with preset profiles (Balanced, Code Output, Review Focus, Delivery Speed, Custom) and individual slider adjustments for ranking weights
 - **Multi-Repository Support** — Configure multiple GitHub repositories and GitLab projects via add/remove row inputs; data from all repos/projects is merged into a single unified view
+- **Parallel Fetching** — Bounded-concurrency workers (5 for GitHub, 3 for GitLab) fetch repos/projects in parallel with phased progress UI; inactive repos are skipped for PR metrics; authenticated requests use reduced API throttle
 - **Smart Caching** — localStorage-based caching with 12-hour TTL and 4 MB size guard per entry; cache banners show data freshness with one-click refresh; Clear Cache button in Settings
 - **Demo Mode** — One-click synthetic data with a realistic performance spread for presentations and evaluation
 
@@ -215,7 +218,7 @@ All integration configuration is done through the **Settings** tab in the UI:
 | Field             | Description                                                  |
 | ----------------- | ------------------------------------------------------------ |
 | GitHub token      | OAuth flow or manual PAT                                     |
-| Repositories      | One or more `owner/repo` entries via add/remove row inputs (data is merged across repos) |
+| Repositories      | One or more `org/repository` entries via add/remove row inputs (data is merged across repos) |
 | Jira URL          | `https://your-org.atlassian.net` (Cloud) or Data Center URL |
 | Jira API Token    | PAT (Data Center) or API token (Cloud)                       |
 | Jira Email        | Only required for Jira Cloud (Basic Auth)                    |
@@ -246,6 +249,35 @@ Fetched data from GitHub, Jira, and GitLab is automatically stored in the browse
 ## Multi-Repository Support
 
 The dashboard supports fetching data from **multiple GitHub repositories** and **multiple GitLab projects** simultaneously. In the Settings tab, use the **+ Add repo / + Add project** buttons to create additional input rows. Data from all configured repos/projects is merged into a single unified view across commits, contributors, and PR/MR metrics.
+
+---
+
+## Performance Optimizations
+
+When working with many repositories (40+), several optimizations keep fetch times manageable:
+
+| Optimisation | Detail |
+| --- | --- |
+| **Parallel fetching** | A bounded-concurrency `pMap` helper processes up to **5 GitHub repos** or **3 GitLab projects** in parallel instead of sequentially |
+| **Reduced throttle** | Authenticated GitHub requests use a **1.2 s** search delay (down from 2.2 s for unauthenticated) |
+| **Inactive-repo skip** | After fetching commits, repos with zero activity in the date range are excluded from the expensive PR metrics fetch |
+| **Phased progress UI** | The loading overlay shows which phase is running (contributors → commits → PR metrics) with a monotonic `completed / total` counter |
+
+---
+
+## Performance Ranking
+
+The Performance tab uses a **configurable composite score** to rank associates. Weights are adjustable per-metric and can be saved across sessions.
+
+| Preset | Focus |
+| --- | --- |
+| **Balanced** | Equal emphasis on all metrics |
+| **Code Output** | Heavier weight on commits and PRs merged |
+| **Review Focus** | Prioritises PR reviews and review comments |
+| **Delivery Speed** | Emphasises cycle time and merge rate |
+| **Custom** | Fully manual slider control |
+
+Each factor (commits, PRs opened, PRs merged, PRs reviewed, review comments, cycle time, churn %) has an individual weight slider (0–100). Changing any slider automatically switches the preset to **Custom**. Weights are persisted in `localStorage`.
 
 ---
 
