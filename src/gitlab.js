@@ -88,18 +88,36 @@ export async function fetchGitLabMRMetrics(glUrl, glToken, glProject, authors = 
 
 // ── Multi-project wrappers ───────────────────────────────────────────────────
 
+const GL_PROJECT_CONCURRENCY = 3;
+
+async function pMap(items, fn, concurrency) {
+  const results = [];
+  let i = 0;
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
 function parseProjectList(input) {
   if (Array.isArray(input)) return input.map(p => p.trim()).filter(Boolean);
   return (input || '').split(',').map(p => p.trim()).filter(Boolean);
 }
 
-export async function fetchMultiProjectCommits(glUrl, glToken, projects, authors = [], since = null, until = null) {
+export async function fetchMultiProjectCommits(glUrl, glToken, projects, authors = [], since = null, until = null, { onProgress } = {}) {
   const projectList = parseProjectList(projects);
-  let allCommits = [];
-  for (const project of projectList) {
+  let done = 0;
+  const allResults = await pMap(projectList, async (project) => {
     const commits = await fetchGitLabCommits(glUrl, glToken, project, authors, since, until);
-    allCommits = allCommits.concat(commits);
-  }
+    done++;
+    onProgress?.({ completed: done, total: projectList.length, currentProject: project });
+    return commits;
+  }, GL_PROJECT_CONCURRENCY);
+  const allCommits = allResults.flat();
   const seen = new Set();
   return allCommits.filter(c => {
     const key = c.sha || c.id || JSON.stringify(c);
@@ -109,11 +127,12 @@ export async function fetchMultiProjectCommits(glUrl, glToken, projects, authors
   });
 }
 
-export async function fetchMultiProjectMRMetrics(glUrl, glToken, projects, authors = [], since = null, until = null) {
+export async function fetchMultiProjectMRMetrics(glUrl, glToken, projects, authors = [], since = null, until = null, { onProgress } = {}) {
   const projectList = parseProjectList(projects);
   const merged = {};
+  let done = 0;
 
-  for (const project of projectList) {
+  await pMap(projectList, async (project) => {
     const metrics = await fetchGitLabMRMetrics(glUrl, glToken, project, authors, since, until);
     for (const [login, data] of Object.entries(metrics)) {
       const existing = merged[login];
@@ -127,7 +146,9 @@ export async function fetchMultiProjectMRMetrics(glUrl, glToken, projects, autho
         }
       }
     }
-  }
+    done++;
+    onProgress?.({ completed: done, total: projectList.length, currentProject: project });
+  }, GL_PROJECT_CONCURRENCY);
 
   return merged;
 }

@@ -169,7 +169,7 @@ function extractComments(fields) {
 // ── Normalise raw Jira issue → flat object ────────────────────────────────────
 
 const SP_CANDIDATES = [
-  'customfield_10028',       // "Story Points" (Red Hat / common)
+  'customfield_10028',       // "Story Points" (common Jira instances)
   'story_points',            // native field (newer Jira Cloud)
   'customfield_10016',       // "Story point estimate" (Jira Cloud default)
   'customfield_10506',       // "DEV Story Points"
@@ -177,7 +177,7 @@ const SP_CANDIDATES = [
   'customfield_10572',       // "QE Story Points"
   'customfield_10977',       // "Original story points"
   'customfield_10004',       // some instances
-  'customfield_12310243',    // Red Hat Jira (legacy)
+  'customfield_12310243',    // legacy Jira Data Center instances
 ];
 
 function extractStoryPoints(fields, spField) {
