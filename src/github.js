@@ -42,44 +42,6 @@ export async function fetchContributors(token, repoFullName) {
   }));
 }
 
-export async function fetchCommits(token, repoFullName, authors = [], since = null, until = null) {
-  const { owner, name } = parseRepo(repoFullName);
-  const headers = buildHeaders(token);
-  let allCommits = [];
-
-  const targets = authors.length > 0 ? authors : [null];
-
-  for (const author of targets) {
-    let url = `${BASE_URL}/repos/${owner}/${name}/commits?`;
-    if (author) url += `author=${author}&`;
-    if (since) url += `since=${new Date(since).toISOString()}&`;
-    if (until) {
-      const untilDate = new Date(until);
-      untilDate.setHours(23, 59, 59, 999);
-      url += `until=${untilDate.toISOString()}&`;
-    }
-
-    const commits = await fetchAllPages(url.replace(/&$/, ''), headers);
-    allCommits = allCommits.concat(
-      commits.map((c) => ({
-        sha: c.sha,
-        author: c.author?.login || c.commit?.author?.name || 'unknown',
-        authorAvatar: c.author?.avatar_url || null,
-        message: c.commit?.message?.split('\n')[0] || '',
-        date: c.commit?.author?.date || '',
-        url: c.html_url,
-      }))
-    );
-  }
-
-  const seen = new Set();
-  return allCommits.filter((c) => {
-    if (seen.has(c.sha)) return false;
-    seen.add(c.sha);
-    return true;
-  });
-}
-
 // ── PR helpers ────────────────────────────────────────────────────────────────
 
 const SEARCH_DELAY_MS = 2200;
@@ -158,7 +120,7 @@ async function fetchPRDetails(headers, owner, name, prNumbers, delayMs = SEARCH_
  *                             avgCycleTimeDays, churnPct, reviewComments,
  *                             avgLinesChanged, avgFilesChanged } }
  */
-export async function fetchPRMetrics(token, repoFullName, authors = [], since = null, until = null) {
+export async function fetchPRMetrics(token, repoFullName, authors = [], since = null, until = null, sharedState = null) {
   if (!authors.length) return {};
   const { owner, name } = parseRepo(repoFullName);
   const headers = buildHeaders(token);
@@ -166,6 +128,7 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
   const createdRange = since ? ` created:${since}..${until ?? '*'}` : '';
   const mergedRange  = since ? ` merged:${since}..${until ?? '*'}`  : '';
   const delay = token ? SEARCH_DELAY_AUTH_MS : SEARCH_DELAY_MS;
+  const isRateLimited = () => sharedState?.rateLimited ?? false;
 
   let allReviewComments = [];
   try {
@@ -205,46 +168,46 @@ export async function fetchPRMetrics(token, repoFullName, authors = [], since = 
       additions: detail?.additions ?? null,
       deletions: detail?.deletions ?? null,
       changedFiles: detail?.changed_files ?? null,
+      repo: repoFullName,
     };
   };
 
   const metrics = {};
   let rateLimited = false;
+  const setRateLimited = () => {
+    rateLimited = true;
+    if (sharedState) sharedState.rateLimited = true;
+  };
 
   for (let ai = 0; ai < authors.length; ai++) {
     const author = authors[ai];
-    if (rateLimited) {
+    if (rateLimited || isRateLimited()) {
+      rateLimited = true;
       metrics[author] = { _rateLimited: true, prsOpened:0, prsMerged:0, prsReviewed:0, prsChurned:0, avgCycleTimeDays:null, churnPct:0, reviewComments:0, avgLinesChanged:null, avgFilesChanged:null, authoredPRs:[], reviewedPRs:[] };
       continue;
     }
 
     let openedItems = [], mergedItems = [], reviewedItems = [];
 
-    try { openedItems = await searchGitHub(headers, `${repo} is:pr author:${author}${createdRange}`); }
-    catch (e) {
-      if (String(e).includes('rate limit')) { rateLimited = true; }
-      else { console.warn(`[PR] opened search failed for ${author}:`, e.message); }
-    }
+    // Fire all 3 search queries with staggered starts to overlap network time
+    const [openedRes, mergedRes, reviewedRes] = await Promise.allSettled([
+      searchGitHub(headers, `${repo} is:pr author:${author}${createdRange}`),
+      sleep(delay).then(() => searchGitHub(headers, `${repo} is:pr is:merged author:${author}${mergedRange}`)),
+      sleep(delay * 2).then(() => searchGitHub(headers, `${repo} is:pr reviewed-by:${author}${createdRange}`)),
+    ]);
 
-    if (!rateLimited) {
-      await sleep(delay);
-      try { mergedItems = await searchGitHub(headers, `${repo} is:pr is:merged author:${author}${mergedRange}`); }
-      catch (e) {
-        if (String(e).includes('rate limit')) { rateLimited = true; }
-        else { console.warn(`[PR] merged search failed for ${author}:`, e.message); }
+    for (const [res, label] of [[openedRes, 'opened'], [mergedRes, 'merged'], [reviewedRes, 'reviewed']]) {
+      if (res.status === 'fulfilled') {
+        if (label === 'opened') openedItems = res.value;
+        else if (label === 'merged') mergedItems = res.value;
+        else reviewedItems = res.value;
+      } else if (String(res.reason).includes('rate limit')) {
+        setRateLimited();
+      } else {
+        console.warn(`[PR] ${label} search failed for ${author}:`, res.reason?.message);
       }
     }
 
-    if (!rateLimited) {
-      await sleep(delay);
-      try { reviewedItems = await searchGitHub(headers, `${repo} is:pr reviewed-by:${author}${createdRange}`); }
-      catch (e) {
-        if (String(e).includes('rate limit')) { rateLimited = true; }
-        else { console.warn(`[PR] reviewed search failed for ${author}:`, e.message); }
-      }
-    }
-
-    // Fetch PR detail for complexity metrics and per-PR additions/deletions/files
     let prDetails = [];
     if (!rateLimited) {
       const allPRNumbers = [...new Set([
@@ -338,25 +301,26 @@ export async function fetchMultiRepoContributors(token, repos, { onProgress } = 
   return [...merged.values()].sort((a, b) => b.totalContributions - a.totalContributions);
 }
 
-export async function fetchMultiRepoCommits(token, repos, authors = [], since = null, until = null, { onProgress } = {}) {
-  const repoList = parseRepoList(repos);
-  let done = 0;
-  const allResults = await pMap(repoList, async (repo) => {
-    const commits = await fetchCommits(token, repo, authors, since, until);
-    done++;
-    onProgress?.({ completed: done, total: repoList.length, currentRepo: repo });
-    return commits;
-  }, GH_REPO_CONCURRENCY);
-  const allCommits = allResults.flat();
-  const seen = new Set();
-  return allCommits.filter(c => {
-    if (seen.has(c.sha)) return false;
-    seen.add(c.sha);
-    return true;
-  });
+function _weightedAvg(avgA, nA, avgB, nB) {
+  if (avgA == null && avgB == null) return null;
+  const sumA = (avgA ?? 0) * nA;
+  const sumB = (avgB ?? 0) * nB;
+  const total = nA + nB;
+  return total > 0 ? Math.round((sumA + sumB) / total * 10) / 10 : null;
+}
+
+function _weightedAvgRound(avgA, nA, avgB, nB) {
+  if (avgA == null && avgB == null) return null;
+  const sumA = (avgA ?? 0) * nA;
+  const sumB = (avgB ?? 0) * nB;
+  const total = nA + nB;
+  return total > 0 ? Math.round((sumA + sumB) / total) : null;
 }
 
 function mergePRMetricsEntry(existing, data) {
+  const prevMerged = existing.prsMerged ?? 0;
+  const newMerged  = data.prsMerged ?? 0;
+
   existing.prsOpened      += data.prsOpened ?? 0;
   existing.prsMerged      += data.prsMerged ?? 0;
   existing.prsReviewed    += data.prsReviewed ?? 0;
@@ -364,39 +328,38 @@ function mergePRMetricsEntry(existing, data) {
   existing.reviewComments += data.reviewComments ?? 0;
   existing.authoredPRs = (existing.authoredPRs ?? []).concat(data.authoredPRs ?? []);
   existing.reviewedPRs = (existing.reviewedPRs ?? []).concat(data.reviewedPRs ?? []);
-  const allCycles = [];
-  if (existing.avgCycleTimeDays != null) allCycles.push(existing.avgCycleTimeDays);
-  if (data.avgCycleTimeDays != null) allCycles.push(data.avgCycleTimeDays);
-  existing.avgCycleTimeDays = allCycles.length
-    ? Math.round(allCycles.reduce((a, b) => a + b, 0) / allCycles.length * 10) / 10
-    : null;
-  const allLines = [];
-  if (existing.avgLinesChanged != null) allLines.push(existing.avgLinesChanged);
-  if (data.avgLinesChanged != null) allLines.push(data.avgLinesChanged);
-  existing.avgLinesChanged = allLines.length
-    ? Math.round(allLines.reduce((a, b) => a + b, 0) / allLines.length)
-    : null;
-  const allFiles = [];
-  if (existing.avgFilesChanged != null) allFiles.push(existing.avgFilesChanged);
-  if (data.avgFilesChanged != null) allFiles.push(data.avgFilesChanged);
-  existing.avgFilesChanged = allFiles.length
-    ? Math.round(allFiles.reduce((a, b) => a + b, 0) / allFiles.length * 10) / 10
-    : null;
+
+  existing.avgCycleTimeDays = _weightedAvg(
+    existing.avgCycleTimeDays, prevMerged,
+    data.avgCycleTimeDays, newMerged,
+  );
+  existing.avgLinesChanged = _weightedAvgRound(
+    existing.avgLinesChanged, prevMerged,
+    data.avgLinesChanged, newMerged,
+  );
+  existing.avgFilesChanged = _weightedAvg(
+    existing.avgFilesChanged, prevMerged,
+    data.avgFilesChanged, newMerged,
+  );
   existing.churnPct = existing.prsOpened > 0
     ? Math.round((existing.prsChurned / existing.prsOpened) * 100)
     : 0;
 }
 
-export async function fetchMultiRepoPRMetrics(token, repos, authors = [], since = null, until = null, { onProgress, activeRepos } = {}) {
+export async function fetchMultiRepoPRMetrics(token, repos, authors = [], since = null, until = null, { onProgress } = {}) {
   const repoList = parseRepoList(repos);
-  const targetRepos = activeRepos ? repoList.filter(r => activeRepos.has(r)) : repoList;
   const merged = {};
-  let anyRateLimited = false;
+  const sharedState = { rateLimited: false };
   let done = 0;
 
-  await pMap(targetRepos, async (repo) => {
-    const metrics = await fetchPRMetrics(token, repo, authors, since, until);
-    if (metrics._rateLimited) anyRateLimited = true;
+  await pMap(repoList, async (repo) => {
+    if (sharedState.rateLimited) {
+      done++;
+      onProgress?.({ completed: done, total: repoList.length, currentRepo: repo });
+      return;
+    }
+    const metrics = await fetchPRMetrics(token, repo, authors, since, until, sharedState);
+    if (metrics._rateLimited) sharedState.rateLimited = true;
 
     for (const [login, data] of Object.entries(metrics)) {
       if (login === '_rateLimited') continue;
@@ -408,27 +371,9 @@ export async function fetchMultiRepoPRMetrics(token, repos, authors = [], since 
       }
     }
     done++;
-    onProgress?.({ completed: done, total: targetRepos.length, currentRepo: repo });
+    onProgress?.({ completed: done, total: repoList.length, currentRepo: repo });
   }, GH_REPO_CONCURRENCY);
 
-  merged._rateLimited = anyRateLimited;
+  merged._rateLimited = sharedState.rateLimited;
   return merged;
-}
-
-export async function fetchContributorStats(token, repoFullName) {
-  const { owner, name } = parseRepo(repoFullName);
-  const url = `${BASE_URL}/repos/${owner}/${name}/stats/contributors`;
-  const headers = buildHeaders(token);
-
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const res = await fetch(url, { headers });
-    if (res.status === 202) {
-      await new Promise((r) => setTimeout(r, 2000));
-      continue;
-    }
-    if (!res.ok) throw new Error(`GitHub API error: ${res.status}`);
-    const data = await res.json();
-    return data;
-  }
-  return [];
 }

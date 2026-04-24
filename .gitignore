@@ -44,3 +44,10 @@ pnpm-debug.log*
 .pytest_cache/
 htmlcov/
 .coverage
+
+# ── Tool caches ──────────────────────────────────────────────────────────────
+coverage/
+.vite/
+*.tsbuildinfo
+.eslintcache
+.cursor/
