@@ -267,7 +267,7 @@ export default function GitHubTab() {
               {(() => {
                 const isAuthored = prListTab === 'authored';
                 const isMultiRepo = ghRepoList.length > 1;
-                const prColCount = (isAuthored ? 8 : 5) + (isMultiRepo ? 1 : 0);
+                const prColCount = (isAuthored ? 8 : 6) + (isMultiRepo ? 1 : 0);
                 return (
               <table>
                 <thead><tr>
@@ -275,6 +275,7 @@ export default function GitHubTab() {
                   <th>Title</th>
                   {isMultiRepo && <th>Repo</th>}
                   <th>Author</th>
+                  {!isAuthored && <th>Reviewer</th>}
                   <th>Status</th>
                   {isAuthored && <th>+/−</th>}
                   {isAuthored && <th>Files</th>}
@@ -292,6 +293,7 @@ export default function GitHubTab() {
                       <td><a className="pr-title-link" href={pr.url} target="_blank" rel="noreferrer">{pr.title}</a></td>
                       {isMultiRepo && <td style={{ fontSize:12, whiteSpace:'nowrap', maxWidth:180, overflow:'hidden', textOverflow:'ellipsis' }} title={pr.repo}>{pr.repo?.split('/').pop() || '—'}</td>}
                       <td title={pr.author}>{ghDisplayName(pr.author)}</td>
+                      {!isAuthored && <td title={pr.login}>{ghDisplayName(pr.login)}</td>}
                       <td>
                         <span style={{
                           padding:'2px 8px', borderRadius:12, fontSize:11, fontWeight:600,

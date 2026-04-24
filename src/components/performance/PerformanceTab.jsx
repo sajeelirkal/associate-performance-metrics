@@ -114,6 +114,8 @@ export default function PerformanceTab() {
                     <div className="perf-metric"><span>GL MRs Merged</span><strong style={{ color:'#FC6D26' }}>{p.glMRsMerged}</strong></div>
                     <div className="perf-metric"><span>GL Reviews Given</span><strong style={{ color:'#FC6D26' }}>{p.glMRsReviewed}</strong></div>
                     <div className="perf-metric"><span>GL MR Cycle Time</span><strong>{p.glAvgCycleTime != null ? `${p.glAvgCycleTime}d` : '—'}</strong></div>
+                    <div className="perf-metric"><span>GL Avg Lines/MR</span><strong style={{ color:'#f0883e' }}>{p.glAvgLinesChanged != null ? p.glAvgLinesChanged.toLocaleString() : '—'}</strong></div>
+                    <div className="perf-metric"><span>GL Avg Files/MR</span><strong style={{ color:'#d29922' }}>{p.glAvgFilesChanged != null ? p.glAvgFilesChanged : '—'}</strong></div>
                   </>}
                   <div className="perf-metric" style={{ borderTop:'1px solid var(--border)', gridColumn:'1/-1', paddingTop:4, marginTop:2 }}/>
                   <div className="perf-metric"><span>Issues Done</span><strong style={{ color:'var(--accent2)' }}>{p.issuesDone}</strong></div>
@@ -259,8 +261,9 @@ export default function PerformanceTab() {
                     <th>GH PRs Merged</th>
                     <th>GL MRs Merged</th>
                     <th>Reviews</th>
-                    <th>Avg Lines/PR</th>
-                    <th>Avg Files/PR</th>
+                    <th>GH Avg Lines/PR</th>
+                    <th>GL Avg Lines/MR</th>
+                    <th>Avg Files</th>
                     <th>PR Churn <InfoTip text={PR_CHURN_TIP} /></th>
                     <th>Issues Done</th>
                     <th>Issues Open</th>
@@ -285,7 +288,8 @@ export default function PerformanceTab() {
                       <td style={{ color:'#FC6D26', fontWeight:600 }}>{p.glMRsMerged ?? '—'}</td>
                       <td style={{ color:'var(--accent4)', fontWeight:600 }}>{(pr?.prsReviewed ?? 0) + (p.glMRsReviewed ?? 0)}</td>
                       <td style={{ color:'#f0883e', fontWeight:600 }}>{pr?.avgLinesChanged != null ? pr.avgLinesChanged.toLocaleString() : '—'}</td>
-                      <td style={{ color:'#d29922', fontWeight:600 }}>{pr?.avgFilesChanged ?? '—'}</td>
+                      <td style={{ color:'#f0883e', fontWeight:600 }}>{p.glAvgLinesChanged != null ? p.glAvgLinesChanged.toLocaleString() : '—'}</td>
+                      <td style={{ color:'#d29922', fontWeight:600 }}>{(() => { const gh = pr?.avgFilesChanged; const gl = p.glAvgFilesChanged; if (gh != null && gl != null) return `${gh} / ${gl}`; return gh ?? gl ?? '—'; })()}</td>
                       <td>
                         {pr?.churnPct != null
                           ? <span style={{ color:(pr.churnPct>60)?'var(--danger)':'inherit', fontWeight:600 }}>{pr.churnPct}%</span>

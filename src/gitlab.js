@@ -113,8 +113,9 @@ export async function fetchMultiProjectMRMetrics(glUrl, glToken, projects, autho
       } else if (data && typeof data === 'object') {
         const prevMerged = existing.mrsMerged ?? 0;
         const newMerged  = data.mrsMerged ?? 0;
+        const weightedAvgKeys = new Set(['avgCycleTimeDays', 'avgLinesChanged', 'avgFilesChanged']);
         for (const [k, v] of Object.entries(data)) {
-          if (k === 'avgCycleTimeDays') {
+          if (weightedAvgKeys.has(k)) {
             if (existing[k] == null && v == null) continue;
             const sumA = (existing[k] ?? 0) * prevMerged;
             const sumB = (v ?? 0) * newMerged;

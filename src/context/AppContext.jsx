@@ -678,6 +678,8 @@ export function AppProvider({ children }) {
         glMRsMerged: myGlMR.mrsMerged ?? 0,
         glMRsReviewed: myGlMR.mrsReviewed ?? 0,
         glAvgCycleTime: myGlMR.avgCycleTimeDays ?? null,
+        glAvgLinesChanged: myGlMR.avgLinesChanged ?? null,
+        glAvgFilesChanged: myGlMR.avgFilesChanged ?? null,
         issuesTotal: myIssues.length,
         issuesDone: doneIssues.length,
         issuesOpen: openIssues.length,

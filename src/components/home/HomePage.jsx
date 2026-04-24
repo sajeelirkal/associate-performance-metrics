@@ -49,8 +49,8 @@ export default function HomePage() {
 
       <section className="features-grid">
         {[
-          { icon: <GitHubIcon size={28} />, title: 'GitHub Analytics', desc: 'Commits, PRs, code reviews, churn rates, and cycle time analysis per contributor.', color: '#58a6ff', tab: 'github' },
-          { icon: <GitLabIcon size={28} />, title: 'GitLab Integration', desc: 'Merge requests, commit tracking, review notes, and activity breakdowns across projects.', color: '#FC6D26', tab: 'gitlab' },
+          { icon: <GitHubIcon size={28} />, title: 'GitHub Analytics', desc: 'Pull requests, code reviews, churn rates, cycle time, and complexity metrics per contributor.', color: '#58a6ff', tab: 'github' },
+          { icon: <GitLabIcon size={28} />, title: 'GitLab Integration', desc: 'Merge requests, reviewer attribution, lines changed, cycle time, and activity breakdowns across projects.', color: '#FC6D26', tab: 'gitlab' },
           { icon: <JiraIcon size={28} />, title: 'Jira Tracking', desc: 'Sprint health, issue lifecycle, story points, comments, and status transition history.', color: '#2684FF', tab: 'jira' },
           { icon: <span style={{fontSize:28}}>📊</span>, title: 'Performance View', desc: 'Cross-platform comparisons with radar charts, engagement metrics, and team summaries.', color: '#d2a8ff', tab: 'performance' },
         ].map(f => (
@@ -72,7 +72,7 @@ export default function HomePage() {
         <div className="highlight-card">
           <div className="highlight-number" style={{ color:'var(--accent2)' }}>15+</div>
           <div className="highlight-label">Metrics Tracked</div>
-          <div className="highlight-sub">Commits · PRs · Reviews · Sprint Health</div>
+          <div className="highlight-sub">PRs · MRs · Reviews · Sprint Health</div>
         </div>
         <div className="highlight-card">
           <div className="highlight-number" style={{ color:'var(--accent4)' }}>Real-time</div>

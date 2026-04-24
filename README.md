@@ -21,17 +21,19 @@
 
 ## Features
 
-- **GitHub Tab** — Commits, contributors, PR activity (opened / merged / reviewed), PR churn & cycle time charts, PR complexity metrics (avg lines/files per PR), browsable authored & reviewed PR lists with search and pagination, weekly commit breakdowns, and contribution share
-- **GitLab Tab** — Merge requests, commit tracking, review notes, and activity breakdowns across projects
-- **Jira Tab** — Issues, sprint spillovers, cycle time, story points, status transitions, per-associate filtering, and search
-- **Performance Tab** — Unified metrics across all platforms, per-associate scorecards, relative radar chart, 1:1 associate deep-dive, and full summary table with PR complexity data
-- **Work Summary & CSV Export** — Per-associate work summary combining commits and Jira issues, exportable as CSV for offline review
-- **Settings Tab** — GitHub OAuth / PAT, Jira Cloud & Data Center config, GitLab self-managed support, date range picker, GitHub-Jira username mapping, single "Fetch All" button
+- **GitHub Tab** — PR activity (opened / merged / reviewed), PR churn & cycle time charts, PR complexity metrics (avg lines/files per PR), browsable authored & reviewed PR lists with reviewer names, search and pagination, and contribution share
+- **GitLab Tab** — Merge requests (opened / merged / reviewed), avg lines & files per MR, cycle time, reviewer detection via formal assignment and merge-by attribution, browsable authored & reviewed MR lists with reviewer names
+- **Jira Tab** — Issues, sprint spillovers, cycle time, story points, status transitions, per-associate filtering on both charts and tables, and search
+- **Performance Tab** — Unified metrics across all platforms (GitHub + GitLab + Jira), per-associate scorecards with GL Avg Lines/MR and Avg Files/MR, relative radar chart, 1:1 associate deep-dive, and full summary table
+- **Work Summary & CSV Export** — Per-associate work summary combining PR/MR activity and Jira issues, exportable as CSV for offline review
+- **Settings Tab** — GitHub OAuth / PAT, Jira Cloud & Data Center config, GitLab self-managed support, date range picker, GitHub-Jira-GitLab username mapping, single "Fetch All" button, Clear Cache with confirmation
 - **Performance Ranking** *(planned)* — Configurable composite scoring with preset profiles (Balanced, Code Output, Review Focus, Delivery Speed, Custom) and individual slider adjustments for ranking weights
 - **Multi-Repository Support** — Configure multiple GitHub repositories and GitLab projects via add/remove row inputs; data from all repos/projects is merged into a single unified view
 - **Parallel Fetching** — Bounded-concurrency workers (5 for GitHub, 3 for GitLab) fetch repos/projects in parallel with phased progress UI; inactive repos are skipped for PR metrics; authenticated requests use reduced API throttle
-- **Smart Caching** — localStorage-based caching with 12-hour TTL and 4 MB size guard per entry; cache banners show data freshness with one-click refresh; Clear Cache button in Settings
+- **Smart Caching** — localStorage-based caching with 12-hour TTL and 4 MB size guard per entry; cache banners show data freshness with one-click refresh; Clear Cache button alongside fetch controls
 - **Demo Mode** — One-click synthetic data with a realistic performance spread for presentations and evaluation
+- **Testing** — Frontend unit tests with Vitest; backend endpoint tests with Pytest
+- **TypeScript** — Incremental migration with shared type definitions and typed utility modules
 
 ---
 
@@ -71,10 +73,11 @@
 
 | Layer    | Technology                                         |
 | -------- | -------------------------------------------------- |
-| Frontend | React 19, Vite 7, Recharts, react-datepicker, Lucide icons |
+| Frontend | React 19, Vite 7, TypeScript (incremental), Recharts, react-datepicker |
 | Backend  | Python 3.13, FastAPI, `jira` library, `requests`   |
+| Testing  | Vitest (frontend), Pytest (backend)                |
 | Auth     | GitHub OAuth (+ PAT fallback), Jira PAT / Basic Auth |
-| Infra    | Docker, Docker Compose, Podman compatible          |
+| Infra    | Docker, Docker Compose, Nginx (prod), Gunicorn (prod), Podman compatible |
 
 ---
 
@@ -288,23 +291,54 @@ Each factor (commits, PRs opened, PRs merged, PRs reviewed, review comments, cyc
 
 ```
 associate-performance-metrics/
-├── src/                    # React frontend source
-│   ├── App.jsx             # Main application component
-│   ├── App.css             # Styles
-│   ├── github.js           # GitHub API integration
-│   ├── gitlab.js           # GitLab API integration
-│   ├── jira.js             # Jira API integration
-│   └── demoData.js         # Demo mode synthetic data
+├── src/
+│   ├── App.jsx                 # Root component (AppProvider + AppShell)
+│   ├── App.css                 # Global styles
+│   ├── main.jsx                # Vite entry point
+│   ├── github.js               # GitHub data layer (PR fetching, multi-repo)
+│   ├── gitlab.js               # GitLab data layer (MR fetching, multi-project)
+│   ├── jira.js                 # Jira data layer (issues, sprints, remotelinks)
+│   ├── demoData.js             # Demo mode synthetic data
+│   ├── context/
+│   │   └── AppContext.jsx      # Centralised state management & business logic
+│   ├── components/
+│   │   ├── home/HomePage.jsx       # Landing page
+│   │   ├── github/GitHubTab.jsx    # GitHub analytics tab
+│   │   ├── gitlab/GitLabTab.jsx    # GitLab MR metrics tab
+│   │   ├── jira/JiraTab.jsx        # Jira tracking tab
+│   │   ├── performance/PerformanceTab.jsx  # Cross-platform performance view
+│   │   ├── settings/SettingsPage.jsx       # Configuration & integrations
+│   │   ├── layout/StatusBar.jsx    # Bottom status bar
+│   │   └── shared/                 # Reusable UI components (icons, tooltips, pagination)
+│   ├── utils/
+│   │   ├── cache.ts            # localStorage caching with TTL & size guard
+│   │   └── helpers.ts          # Shared utility functions
+│   └── types/
+│       └── index.ts            # Shared TypeScript type definitions
 ├── backend/
-│   ├── main.py             # FastAPI application
-│   ├── requirements.txt    # Python dependencies
-│   ├── .env.example        # Environment template
-│   └── Dockerfile          # Backend container
-├── Dockerfile              # Frontend container
-├── docker-compose.yml      # Multi-service orchestration
-├── vite.config.js          # Vite dev server + proxy config
-├── package.json            # Node.js dependencies
-└── docs/screenshots/       # Application screenshots
+│   ├── main.py                 # FastAPI app setup, CORS, router mounting
+│   ├── routers/
+│   │   ├── github.py           # GitHub OAuth endpoints
+│   │   ├── gitlab.py           # GitLab MR metrics endpoint
+│   │   └── jira.py             # Jira issues, user resolution, remotelinks
+│   ├── services/
+│   │   ├── shared.py           # HTTP session, proxy bypass, env config, helpers
+│   │   ├── gitlab_client.py    # GitLab pagination, GraphQL diff stats
+│   │   └── jira_client.py      # Jira auth, search, user resolution
+│   ├── test_main.py            # Pytest endpoint & helper tests
+│   ├── requirements.txt        # Python dependencies
+│   └── .env.example            # Environment template
+├── Dockerfile                  # Frontend dev container
+├── Dockerfile.prod             # Frontend production (Node build → Nginx)
+├── backend/Dockerfile          # Backend dev container
+├── backend/Dockerfile.prod     # Backend production (Gunicorn + Uvicorn)
+├── docker-compose.yml          # Dev orchestration
+├── docker-compose.prod.yml     # Production orchestration
+├── nginx.conf                  # Nginx config for production frontend
+├── vite.config.js              # Vite dev server, proxy, Vitest config
+├── tsconfig.json               # TypeScript configuration
+├── package.json                # Node.js dependencies & scripts
+└── docs/screenshots/           # Application screenshots
 ```
 
 ---
