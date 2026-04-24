@@ -67,15 +67,6 @@ export async function testGitLabConnection(glUrl, glToken) {
   return data;
 }
 
-export async function fetchGitLabCommits(glUrl, glToken, glProject, authors = [], since = null, until = null) {
-  const data = await glFetch('/commits', glUrl, glToken, glProject, {
-    authors: authors.join(','),
-    since,
-    until,
-  });
-  return data.commits ?? [];
-}
-
 export async function fetchGitLabMRMetrics(glUrl, glToken, glProject, authors = [], since = null, until = null) {
   if (!authors.length) return {};
   const data = await glFetch('/mrs', glUrl, glToken, glProject, {
@@ -108,25 +99,6 @@ function parseProjectList(input) {
   return (input || '').split(',').map(p => p.trim()).filter(Boolean);
 }
 
-export async function fetchMultiProjectCommits(glUrl, glToken, projects, authors = [], since = null, until = null, { onProgress } = {}) {
-  const projectList = parseProjectList(projects);
-  let done = 0;
-  const allResults = await pMap(projectList, async (project) => {
-    const commits = await fetchGitLabCommits(glUrl, glToken, project, authors, since, until);
-    done++;
-    onProgress?.({ completed: done, total: projectList.length, currentProject: project });
-    return commits;
-  }, GL_PROJECT_CONCURRENCY);
-  const allCommits = allResults.flat();
-  const seen = new Set();
-  return allCommits.filter(c => {
-    const key = c.sha || c.id || JSON.stringify(c);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 export async function fetchMultiProjectMRMetrics(glUrl, glToken, projects, authors = [], since = null, until = null, { onProgress } = {}) {
   const projectList = parseProjectList(projects);
   const merged = {};
@@ -139,9 +111,19 @@ export async function fetchMultiProjectMRMetrics(glUrl, glToken, projects, autho
       if (!existing) {
         merged[login] = { ...data };
       } else if (data && typeof data === 'object') {
+        const prevMerged = existing.mrsMerged ?? 0;
+        const newMerged  = data.mrsMerged ?? 0;
         for (const [k, v] of Object.entries(data)) {
-          if (typeof v === 'number') {
+          if (k === 'avgCycleTimeDays') {
+            if (existing[k] == null && v == null) continue;
+            const sumA = (existing[k] ?? 0) * prevMerged;
+            const sumB = (v ?? 0) * newMerged;
+            const total = prevMerged + newMerged;
+            existing[k] = total > 0 ? Math.round((sumA + sumB) / total * 10) / 10 : null;
+          } else if (typeof v === 'number') {
             existing[k] = (existing[k] ?? 0) + v;
+          } else if (Array.isArray(v)) {
+            existing[k] = (existing[k] ?? []).concat(v);
           }
         }
       }
