@@ -96,7 +96,10 @@ export default function JiraTab() {
     const people = userMapping.length > 0
       ? userMapping
       : associateList.map(g => ({ github: g, jira: g, jiraDisplay: '' }));
-    return people
+    const filtered = activeAssociate
+      ? people.filter(p => p.github.toLowerCase() === activeAssociate.toLowerCase())
+      : people;
+    return filtered
       .map(({ github, jira, jiraDisplay }) => {
         const mine = getIssuesForAssignee(jira);
         const done = mine.filter(i => i.statusCategory?.toLowerCase().includes('done')).length;
@@ -112,7 +115,7 @@ export default function JiraTab() {
         return { name: github, label: shortLabel, fullLabel, email: assigneeEmail, total: mine.length, done, open, sp };
       })
       .filter(p => p.total > 0);
-  }, [filteredJiraIssues, userMapping, associateList, getIssuesForAssignee]);
+  }, [filteredJiraIssues, userMapping, associateList, activeAssociate, getIssuesForAssignee]);
 
   return (
     <>

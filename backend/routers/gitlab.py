@@ -79,10 +79,46 @@ def gitlab_mrs(
     all_unique_iids: set = set()
     author_set_lower = {a.lower() for a in author_list}
 
-    # Per-author: {username_lower: {iid: mr}} — MRs where user appears in
-    # the `reviewers` list or was assigned via reviewer_username API.
+    # Per-author: {username_lower: {iid: mr}} — MRs where user participated
+    # as a reviewer (formal assignment, merged_by, or reviewers array).
     reviewed_by: dict[str, dict[int, dict]] = {a.lower(): {} for a in author_list}
 
+    # ── Pass 0: fetch all recently-updated MRs in the project (unfiltered by
+    # author) so we can detect who merged/reviewed whom's MRs.
+    params_all_updated: dict = {"state": "all", "scope": "all"}
+    if since:
+        params_all_updated["updated_after"] = f"{since}T00:00:00Z"
+    if until:
+        params_all_updated["updated_before"] = f"{until}T23:59:59Z"
+
+    all_project_mrs: list = []
+    try:
+        all_project_mrs, _ = gl_paginate(mr_base, headers, params_all_updated, 500)
+        log.info("Fetched %d project-wide MRs for reviewer detection", len(all_project_mrs))
+    except Exception as e:
+        log.warning("Failed to fetch project-wide MRs: %s", e)
+
+    # Build reviewed-by from project-wide MRs:
+    # 1. merged_by user (person who clicked merge) reviewing someone else's MR
+    # 2. reviewers array (formally assigned reviewers)
+    for mr in all_project_mrs:
+        iid = mr.get("iid")
+        if not iid:
+            continue
+        mr_author = (mr.get("author", {}).get("username") or "").lower()
+
+        merged_by = (mr.get("merged_by") or mr.get("merge_user") or {})
+        merger = (merged_by.get("username") or "").lower()
+        if merger in author_set_lower and merger != mr_author:
+            if _in_range(_parse_dt(mr.get("merged_at"))):
+                reviewed_by[merger][iid] = mr
+
+        for reviewer in mr.get("reviewers") or []:
+            rname = (reviewer.get("username") or "").lower()
+            if rname in author_set_lower and rname != mr_author:
+                reviewed_by[rname][iid] = mr
+
+    # ── Pass 1: per-author authored/merged MRs + formal reviewer_username
     for author in author_list:
         params_created: dict = {"author_username": author, "state": "all", "scope": "all"}
         params_merged:  dict = {"author_username": author, "state": "merged", "scope": "all"}
@@ -130,19 +166,6 @@ def gitlab_mrs(
             iid = mr.get("iid")
             if iid:
                 reviewed_by[author.lower()][iid] = mr
-
-        # Also scan the `reviewers` array embedded in every MR response:
-        # if any tracked author appears as a reviewer on this MR (and isn't
-        # the MR's own author), count it as a review for that person.
-        mr_author_lower = author.lower()
-        for mr in created_in_range + merged_in_range:
-            iid = mr.get("iid")
-            if not iid:
-                continue
-            for reviewer in mr.get("reviewers") or []:
-                rname = (reviewer.get("username") or "").lower()
-                if rname in author_set_lower and rname != mr_author_lower:
-                    reviewed_by[rname][iid] = mr
 
         seen_iids: set = set()
         all_authored: list = []
@@ -222,16 +245,26 @@ def gitlab_mrs(
             metrics[author] = {
                 "mrsOpened": 0, "mrsMerged": 0, "mrsReviewed": len(user_reviewed),
                 "avgCycleTimeDays": None,
+                "avgLinesChanged": None,
+                "avgFilesChanged": None,
                 "authoredMRs": [],
                 "reviewedMRs": [_map_mr(mr, diff_stats) for mr in user_reviewed],
             }
             continue
+
+        merged_mapped = [_map_mr(mr, diff_stats) for mr in ad["merged_in_range"]]
+        lines_arr = [(m.get("additions") or 0) + (m.get("deletions") or 0)
+                     for m in merged_mapped
+                     if m.get("additions") is not None or m.get("deletions") is not None]
+        files_arr = [m.get("changedFiles") for m in merged_mapped if m.get("changedFiles") is not None]
 
         entry = {
             "mrsOpened":        len(ad["all_authored"]),
             "mrsMerged":        len(ad["merged_in_range"]),
             "mrsReviewed":      len(user_reviewed),
             "avgCycleTimeDays": ad["avg_cycle"],
+            "avgLinesChanged":  round(sum(lines_arr) / len(lines_arr)) if lines_arr else None,
+            "avgFilesChanged":  round(sum(files_arr) / len(files_arr) * 10) / 10 if files_arr else None,
             "authoredMRs":      [_map_mr(mr, diff_stats) for mr in ad["all_authored"]],
             "reviewedMRs":      [_map_mr(mr, diff_stats) for mr in user_reviewed],
         }

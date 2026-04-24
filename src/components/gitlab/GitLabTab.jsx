@@ -185,7 +185,7 @@ export default function GitLabTab() {
               {(() => {
                 const isAuthored = glMRListTab === 'authored';
                 const isMultiProject = glProjectList.length > 1;
-                const colCount = (isAuthored ? 9 : 5) + (isMultiProject ? 1 : 0);
+                const colCount = (isAuthored ? 9 : 6) + (isMultiProject ? 1 : 0);
                 return (
               <table>
                 <thead><tr>
@@ -193,6 +193,7 @@ export default function GitLabTab() {
                   <th>Title</th>
                   {isMultiProject && <th>Project</th>}
                   <th>Author</th>
+                  {!isAuthored && <th>Reviewer</th>}
                   <th>Status</th>
                   {isAuthored && <th>Code +/−</th>}
                   {isAuthored && <th>Files</th>}
@@ -210,6 +211,7 @@ export default function GitLabTab() {
                       <td><a className="pr-title-link" href={mr.url} target="_blank" rel="noreferrer">{mr.title}</a></td>
                       {isMultiProject && <td style={{ fontSize:12, whiteSpace:'nowrap', maxWidth:180, overflow:'hidden', textOverflow:'ellipsis' }} title={mr.project}>{mr.project?.split('/').pop() || '—'}</td>}
                       <td title={mr.author}>{glDisplayName(mr.author)}</td>
+                      {!isAuthored && <td title={mr.login}>{glDisplayName(mr.login)}</td>}
                       <td>
                         <span style={{
                           padding:'2px 8px', borderRadius:12, fontSize:11, fontWeight:600,
