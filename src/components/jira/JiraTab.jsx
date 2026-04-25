@@ -96,17 +96,20 @@ export default function JiraTab() {
     const people = userMapping.length > 0
       ? userMapping
       : associateList.map(g => ({ github: g, jira: g, jiraDisplay: '' }));
-    const filtered = activeAssociate
+    const activePeople = activeAssociate
       ? people.filter(p => p.github.toLowerCase() === activeAssociate.toLowerCase())
       : people;
-    return filtered
+
+    return activePeople
       .map(({ github, jira, jiraDisplay }) => {
-        const mine = getIssuesForAssignee(jira);
+        const allMine = getIssuesForAssignee(jira);
+        const idSet = new Set(filteredJiraIssues.map(i => i.key));
+        const mine = allMine.filter(i => idSet.has(i.key));
         const done = mine.filter(i => i.statusCategory?.toLowerCase().includes('done')).length;
         const open = mine.length - done;
         const sp = mine.filter(i => i.statusCategory?.toLowerCase().includes('done'))
                         .reduce((s, i) => s + (i.storyPoints || 0), 0);
-        const firstIssue = mine[0];
+        const firstIssue = mine[0] || allMine[0];
         const rawAssigneeName = cleanDisplayName(firstIssue?.assigneeDisplay) || cleanDisplayName(jiraDisplay) || github;
         const assigneeName = (rawAssigneeName && rawAssigneeName !== '—') ? rawAssigneeName : github;
         const assigneeEmail = firstIssue?.assigneeEmail || '';
@@ -166,25 +169,6 @@ export default function JiraTab() {
 
       {jiraFetched && !jiraLoading && (
         <>
-          <div className="stats-grid">
-            {[
-              { label:'Total Issues',     value: filteredJiraIssues.length, color:'#2684FF' },
-              { label:'Open / In Flight', value: filteredJiraIssues.filter(i => !i.statusCategory?.toLowerCase().includes('done')).length, color:'var(--accent5)' },
-              { label:'Done',             value: filteredJiraIssues.filter(i => i.statusCategory?.toLowerCase().includes('done')).length, color:'var(--accent2)' },
-              { label:'Avg Cycle Time',   value: (() => {
-                  const v = filteredJiraIssues.map(i => i.cycleTime).filter(v => v !== null);
-                  return v.length ? `${Math.round(v.reduce((a,b)=>a+b,0)/v.length)}d` : '—';
-                })(), color:'var(--accent4)' },
-              { label:'Total Spillovers', value: filteredJiraIssues.reduce((s,i)=>s+i.spillovers,0), color:'var(--danger)' },
-              { label:'Total Comments',  value: filteredJiraIssues.reduce((s,i)=>s+(i.commentCount??0),0), color:'#d2a8ff' },
-            ].map(s => (
-              <div key={s.label} className="stat-card">
-                <div className="label">{s.label}</div>
-                <div className="value" style={{ color: s.color }}>{s.value}</div>
-              </div>
-            ))}
-          </div>
-
           <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:16 }}>
             {associateOptions.length > 0 && (
               <div className="filters-row" style={{ marginBottom:0 }}>
@@ -238,6 +222,25 @@ export default function JiraTab() {
                   value={jiraSearch} onChange={e => { setJiraSearch(e.target.value); setJiraPage(1); }} style={{ width:240 }} />
               </div>
             </div>
+          </div>
+
+          <div className="stats-grid">
+            {[
+              { label:'Total Issues',     value: filteredJiraIssues.length, color:'#2684FF' },
+              { label:'Open / In Flight', value: filteredJiraIssues.filter(i => !i.statusCategory?.toLowerCase().includes('done')).length, color:'var(--accent5)' },
+              { label:'Done',             value: filteredJiraIssues.filter(i => i.statusCategory?.toLowerCase().includes('done')).length, color:'var(--accent2)' },
+              { label:'Avg Cycle Time',   value: (() => {
+                  const v = filteredJiraIssues.map(i => i.cycleTime).filter(v => v !== null);
+                  return v.length ? `${Math.round(v.reduce((a,b)=>a+b,0)/v.length)}d` : '—';
+                })(), color:'var(--accent4)' },
+              { label:'Total Spillovers', value: filteredJiraIssues.reduce((s,i)=>s+i.spillovers,0), color:'var(--danger)' },
+              { label:'Total Comments',  value: filteredJiraIssues.reduce((s,i)=>s+(i.commentCount??0),0), color:'#d2a8ff' },
+            ].map(s => (
+              <div key={s.label} className="stat-card">
+                <div className="label">{s.label}</div>
+                <div className="value" style={{ color: s.color }}>{s.value}</div>
+              </div>
+            ))}
           </div>
 
           {jiraContribData.length > 0 && (

@@ -18,6 +18,7 @@ export default function GitHubTab() {
   const [prListSearch, setPrListSearch] = useState('');
   const [prListPage, setPrListPage] = useState(1);
   const [prListTab, setPrListTab] = useState('authored');
+  const [prStatusFilter, setPrStatusFilter] = useState('all');
 
   useEffect(() => { setPrListPage(1); }, [activeAssociate]);
 
@@ -36,13 +37,17 @@ export default function GitHubTab() {
         if (!seen.has(key)) { seen.add(key); allItems.push({ ...pr, login }); }
       }
     }
+    let filtered = allItems;
+    if (prStatusFilter !== 'all') {
+      filtered = filtered.filter(pr => pr.state === prStatusFilter);
+    }
     const q = prListSearch.toLowerCase();
-    const filtered = q
-      ? allItems.filter(pr => pr.title.toLowerCase().includes(q) || pr.author.toLowerCase().includes(q) || String(pr.number).includes(q) || (pr.repo || '').toLowerCase().includes(q))
-      : allItems;
+    if (q) {
+      filtered = filtered.filter(pr => pr.title.toLowerCase().includes(q) || pr.author.toLowerCase().includes(q) || String(pr.number).includes(q) || (pr.repo || '').toLowerCase().includes(q));
+    }
     filtered.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return filtered;
-  }, [prMetrics, activeAssociate, associateList, prListTab, prListSearch]);
+  }, [prMetrics, activeAssociate, associateList, prListTab, prListSearch, prStatusFilter]);
 
   const prListRateLimited = useMemo(() => {
     const logins = activeAssociate
@@ -216,12 +221,8 @@ export default function GitHubTab() {
                     </ResponsiveContainer>
                   </div>
 
-                  <div className="chart-card full-width">
-                    <h3>PR Churn &amp; Cycle Time <InfoTip text={PR_CHURN_TIP} />
-                      <span style={{ fontSize:12, fontWeight:400, color:'var(--text-muted)', marginLeft:8 }}>
-                        Lower churn % is better.
-                      </span>
-                    </h3>
+                  <div className="chart-card">
+                    <h3>PR Churn &amp; Cycle Time <InfoTip text={PR_CHURN_TIP} /></h3>
                     <ResponsiveContainer width="100%" height={240}>
                       <BarChart data={prRows} margin={{ top:16, right:40, left:-20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
@@ -276,7 +277,15 @@ export default function GitHubTab() {
                   {isMultiRepo && <th>Repo</th>}
                   <th>Author</th>
                   {!isAuthored && <th>Reviewer</th>}
-                  <th>Status</th>
+                  <th style={{ padding:0 }}>
+                    <select value={prStatusFilter} onChange={e => { setPrStatusFilter(e.target.value); setPrListPage(1); }}
+                      style={{ background:'transparent', color:'inherit', border:'none', font:'inherit', fontWeight:600, cursor:'pointer', padding:'8px 4px', width:'100%' }}>
+                      <option value="all">Status</option>
+                      <option value="open">Open</option>
+                      <option value="merged">Merged</option>
+                      <option value="closed">Closed</option>
+                    </select>
+                  </th>
                   {isAuthored && <th>+/−</th>}
                   {isAuthored && <th>Files</th>}
                   <th>Created</th>

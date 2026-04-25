@@ -234,6 +234,144 @@ class TestGitLabMRs:
         assert m["mrsMerged"] >= 1
         assert isinstance(m["authoredMRs"], list)
 
+    @patch("routers.gitlab.gl_fetch_diff_stats")
+    @patch("routers.gitlab.gl_paginate")
+    def test_avg_lines_and_files_from_diff_stats(self, mock_paginate, mock_diff):
+        mr = {
+            "iid": 10, "title": "T", "web_url": "https://x/10",
+            "state": "merged", "author": {"username": "bob"},
+            "created_at": "2025-06-01T00:00:00Z",
+            "merged_at": "2025-06-02T00:00:00Z",
+            "closed_at": None, "updated_at": "2025-06-02T00:00:00Z",
+            "references": {"full": "g/p!10"}, "user_notes_count": 3,
+        }
+        mock_paginate.return_value = ([mr], False)
+        mock_diff.return_value = {10: {"additions": 80, "deletions": 20, "changedFiles": 4}}
+
+        res = client.get("/api/gitlab/mrs", params={
+            "authors": "bob", "since": "2025-01-01", "until": "2025-12-31",
+        }, headers={
+            "X-GitLab-Url": "https://gitlab.example.com",
+            "X-GitLab-Token": "tok",
+            "X-GitLab-Project": "g/p",
+        })
+        m = res.json()["metrics"]["bob"]
+        assert m["avgLinesChanged"] == 100
+        assert m["avgFilesChanged"] == 4.0
+        assert m["authoredMRs"][0]["notesCount"] == 3
+
+    @patch("routers.gitlab.gl_fetch_diff_stats", return_value={})
+    @patch("routers.gitlab.gl_paginate")
+    def test_reviewer_detection_via_merged_by(self, mock_paginate, mock_diff):
+        """A user who merged someone else's MR should appear in reviewedMRs."""
+        mr_by_alice = {
+            "iid": 50, "title": "Alice MR", "web_url": "https://x/50",
+            "state": "merged", "author": {"username": "alice"},
+            "merged_by": {"username": "bob"},
+            "created_at": "2025-04-01T00:00:00Z",
+            "merged_at": "2025-04-02T00:00:00Z",
+            "closed_at": None, "updated_at": "2025-04-02T00:00:00Z",
+            "references": {"full": "g/p!50"}, "reviewers": [],
+        }
+        mock_paginate.return_value = ([mr_by_alice], False)
+
+        res = client.get("/api/gitlab/mrs", params={
+            "authors": "alice,bob", "since": "2025-01-01", "until": "2025-12-31",
+        }, headers={
+            "X-GitLab-Url": "https://gitlab.example.com",
+            "X-GitLab-Token": "tok",
+            "X-GitLab-Project": "g/p",
+        })
+        metrics = res.json()["metrics"]
+        assert metrics["bob"]["mrsReviewed"] >= 1
+        reviewed_iids = [mr["iid"] for mr in metrics["bob"]["reviewedMRs"]]
+        assert 50 in reviewed_iids
+
+    @patch("routers.gitlab.gl_fetch_diff_stats", return_value={})
+    @patch("routers.gitlab.gl_paginate")
+    def test_reviewer_detection_via_reviewers_array(self, mock_paginate, mock_diff):
+        """A user in the reviewers array should appear in reviewedMRs."""
+        mr = {
+            "iid": 60, "title": "MR with reviewer", "web_url": "https://x/60",
+            "state": "merged", "author": {"username": "alice"},
+            "created_at": "2025-05-01T00:00:00Z",
+            "merged_at": "2025-05-03T00:00:00Z",
+            "closed_at": None, "updated_at": "2025-05-03T00:00:00Z",
+            "references": {"full": "g/p!60"},
+            "reviewers": [{"username": "charlie"}],
+        }
+        mock_paginate.return_value = ([mr], False)
+
+        res = client.get("/api/gitlab/mrs", params={
+            "authors": "alice,charlie", "since": "2025-01-01", "until": "2025-12-31",
+        }, headers={
+            "X-GitLab-Url": "https://gitlab.example.com",
+            "X-GitLab-Token": "tok",
+            "X-GitLab-Project": "g/p",
+        })
+        metrics = res.json()["metrics"]
+        assert metrics["charlie"]["mrsReviewed"] >= 1
+
+    @patch("routers.gitlab.gl_fetch_diff_stats", return_value={})
+    @patch("routers.gitlab.gl_paginate")
+    def test_review_notes_sum(self, mock_paginate, mock_diff):
+        """reviewNotes should sum user_notes_count from reviewed MRs."""
+        mr1 = {
+            "iid": 70, "title": "MR1", "web_url": "https://x/70",
+            "state": "merged", "author": {"username": "alice"},
+            "merged_by": {"username": "bob"},
+            "created_at": "2025-06-01T00:00:00Z",
+            "merged_at": "2025-06-02T00:00:00Z",
+            "closed_at": None, "updated_at": "2025-06-02T00:00:00Z",
+            "references": {"full": "g/p!70"},
+            "reviewers": [], "user_notes_count": 5,
+        }
+        mr2 = {
+            "iid": 71, "title": "MR2", "web_url": "https://x/71",
+            "state": "merged", "author": {"username": "alice"},
+            "merged_by": {"username": "bob"},
+            "created_at": "2025-06-03T00:00:00Z",
+            "merged_at": "2025-06-04T00:00:00Z",
+            "closed_at": None, "updated_at": "2025-06-04T00:00:00Z",
+            "references": {"full": "g/p!71"},
+            "reviewers": [], "user_notes_count": 3,
+        }
+        mock_paginate.return_value = ([mr1, mr2], False)
+
+        res = client.get("/api/gitlab/mrs", params={
+            "authors": "alice,bob", "since": "2025-01-01", "until": "2025-12-31",
+        }, headers={
+            "X-GitLab-Url": "https://gitlab.example.com",
+            "X-GitLab-Token": "tok",
+            "X-GitLab-Project": "g/p",
+        })
+        assert res.json()["metrics"]["bob"]["reviewNotes"] == 8
+
+    @patch("routers.gitlab.gl_fetch_diff_stats", return_value={})
+    @patch("routers.gitlab.gl_paginate")
+    def test_no_self_review(self, mock_paginate, mock_diff):
+        """An author should not be counted as reviewing their own MR."""
+        mr = {
+            "iid": 80, "title": "Self MR", "web_url": "https://x/80",
+            "state": "merged", "author": {"username": "alice"},
+            "merged_by": {"username": "alice"},
+            "created_at": "2025-07-01T00:00:00Z",
+            "merged_at": "2025-07-02T00:00:00Z",
+            "closed_at": None, "updated_at": "2025-07-02T00:00:00Z",
+            "references": {"full": "g/p!80"},
+            "reviewers": [{"username": "alice"}],
+        }
+        mock_paginate.return_value = ([mr], False)
+
+        res = client.get("/api/gitlab/mrs", params={
+            "authors": "alice", "since": "2025-01-01", "until": "2025-12-31",
+        }, headers={
+            "X-GitLab-Url": "https://gitlab.example.com",
+            "X-GitLab-Token": "tok",
+            "X-GitLab-Project": "g/p",
+        })
+        assert res.json()["metrics"]["alice"]["mrsReviewed"] == 0
+
 
 # ── Jira issues ──────────────────────────────────────────────────────────────
 

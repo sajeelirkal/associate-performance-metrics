@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, RadarChart,
@@ -20,6 +20,33 @@ export default function PerformanceTab() {
   const [collapsedPersons, setCollapsedPersons] = useState({});
   const togglePerson = (github) =>
     setCollapsedPersons(s => ({ ...s, [github]: !s[github] }));
+
+  const downloadWorkSummaryCSV = useCallback(() => {
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = [['Associate', 'Source', 'ID', 'Title', 'Status', 'Type', 'Priority', 'URL']];
+    const data = activeAssociate
+      ? workSummary.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase())
+      : workSummary;
+    for (const p of data) {
+      for (const i of p.jiraItems) {
+        rows.push([esc(p.displayName), 'Jira', esc(i.key), esc(i.title), esc(i.status), esc(i.issueType), esc(i.priority), esc(i.url)]);
+      }
+      for (const pr of p.prItems) {
+        rows.push([esc(p.displayName), 'GitHub PR', esc(pr.id), esc(pr.title), esc(pr.state), '', '', esc(pr.url)]);
+      }
+      for (const mr of p.mrItems) {
+        rows.push([esc(p.displayName), 'GitLab MR', esc(mr.id), esc(mr.title), esc(mr.state), '', '', esc(mr.url)]);
+      }
+    }
+    const csv = rows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `work-summary${activeAssociate ? `-${activeAssociate}` : ''}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [workSummary, activeAssociate]);
 
   return (
     <>
@@ -336,6 +363,14 @@ export default function PerformanceTab() {
                   </span>
                 )}
               </button>
+              {workSummaryOpen && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -4, marginBottom: 8 }}>
+                  <button className="btn btn-outline" style={{ padding: '4px 12px', fontSize: 12 }}
+                    onClick={downloadWorkSummaryCSV}>
+                    ↓ Download CSV
+                  </button>
+                </div>
+              )}
 
               {workSummaryOpen && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>

@@ -73,7 +73,7 @@ def resolve_user(
             headers=auth,
             timeout=15,
         )
-        log.info("user/search status=%s body=%s", r.status_code, r.text[:400])
+        log.debug("user/search status=%s body=%s", r.status_code, r.text[:400])
         if not r.ok:
             raise HTTPException(status_code=r.status_code,
                                 detail=f"Jira user search failed: {r.text[:300]}")
@@ -159,17 +159,17 @@ def get_issues(
         if all_issues:
             sample = all_issues[0].get("fields", {})
             all_cf_keys = [k for k in sample.keys() if k.startswith("customfield_")]
-            log.info("First issue (%s) has %d customfield_ keys: %s",
-                     all_issues[0].get("key"), len(all_cf_keys), all_cf_keys[:15])
+            log.debug("First issue (%s) has %d customfield_ keys: %s",
+                      all_issues[0].get("key"), len(all_cf_keys), all_cf_keys[:15])
             sp_found = 0
             for iss in all_issues:
                 f = iss.get("fields", {})
                 for cid in SP_CANDIDATE_FIELDS:
                     if f.get(cid) is not None:
                         sp_found += 1
-                        log.info("  SP hit: %s.%s = %s", iss.get("key"), cid, f.get(cid))
+                        log.debug("  SP hit: %s.%s = %s", iss.get("key"), cid, f.get(cid))
                         break
-            log.info("Issues with SP values: %d / %d", sp_found, len(all_issues))
+            log.debug("Issues with SP values: %d / %d", sp_found, len(all_issues))
 
         log.info("Returning %d issues (sp_field=%s)", len(all_issues), sp_field or "auto")
         return {"issues": all_issues, "total": len(all_issues), "spField": sp_field}

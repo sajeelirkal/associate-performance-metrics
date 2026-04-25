@@ -104,7 +104,7 @@ def gl_fetch_diff_stats(
                 if mr_data and mr_data.get("diffStatsSummary"):
                     stats = mr_data["diffStatsSummary"]
                     if i == 0 and start == 0:
-                        log.info("GitLab GraphQL diffStatsSummary sample for iid=%s: %s", iid, stats)
+                        log.debug("GitLab GraphQL diffStatsSummary sample for iid=%s: %s", iid, stats)
                     result[iid] = {
                         "additions": stats.get("additions", 0),
                         "deletions": stats.get("deletions", 0),
