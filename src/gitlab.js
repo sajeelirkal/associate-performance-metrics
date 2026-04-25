@@ -99,6 +99,29 @@ function parseProjectList(input) {
   return (input || '').split(',').map(p => p.trim()).filter(Boolean);
 }
 
+export function mergeMetricsEntry(existing, data) {
+  if (!existing) return { ...data };
+  if (!data || typeof data !== 'object') return existing;
+
+  const prevMerged = existing.mrsMerged ?? 0;
+  const newMerged  = data.mrsMerged ?? 0;
+  const weightedAvgKeys = new Set(['avgCycleTimeDays', 'avgLinesChanged', 'avgFilesChanged']);
+  for (const [k, v] of Object.entries(data)) {
+    if (weightedAvgKeys.has(k)) {
+      if (existing[k] == null && v == null) continue;
+      const sumA = (existing[k] ?? 0) * prevMerged;
+      const sumB = (v ?? 0) * newMerged;
+      const total = prevMerged + newMerged;
+      existing[k] = total > 0 ? Math.round((sumA + sumB) / total * 10) / 10 : null;
+    } else if (typeof v === 'number') {
+      existing[k] = (existing[k] ?? 0) + v;
+    } else if (Array.isArray(v)) {
+      existing[k] = (existing[k] ?? []).concat(v);
+    }
+  }
+  return existing;
+}
+
 export async function fetchMultiProjectMRMetrics(glUrl, glToken, projects, authors = [], since = null, until = null, { onProgress } = {}) {
   const projectList = parseProjectList(projects);
   const merged = {};
@@ -107,27 +130,7 @@ export async function fetchMultiProjectMRMetrics(glUrl, glToken, projects, autho
   await pMap(projectList, async (project) => {
     const metrics = await fetchGitLabMRMetrics(glUrl, glToken, project, authors, since, until);
     for (const [login, data] of Object.entries(metrics)) {
-      const existing = merged[login];
-      if (!existing) {
-        merged[login] = { ...data };
-      } else if (data && typeof data === 'object') {
-        const prevMerged = existing.mrsMerged ?? 0;
-        const newMerged  = data.mrsMerged ?? 0;
-        const weightedAvgKeys = new Set(['avgCycleTimeDays', 'avgLinesChanged', 'avgFilesChanged']);
-        for (const [k, v] of Object.entries(data)) {
-          if (weightedAvgKeys.has(k)) {
-            if (existing[k] == null && v == null) continue;
-            const sumA = (existing[k] ?? 0) * prevMerged;
-            const sumB = (v ?? 0) * newMerged;
-            const total = prevMerged + newMerged;
-            existing[k] = total > 0 ? Math.round((sumA + sumB) / total * 10) / 10 : null;
-          } else if (typeof v === 'number') {
-            existing[k] = (existing[k] ?? 0) + v;
-          } else if (Array.isArray(v)) {
-            existing[k] = (existing[k] ?? []).concat(v);
-          }
-        }
-      }
+      merged[login] = mergeMetricsEntry(merged[login], data);
     }
     done++;
     onProgress?.({ completed: done, total: projectList.length, currentProject: project });

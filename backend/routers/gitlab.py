@@ -164,7 +164,8 @@ def gitlab_mrs(
         ]
         for mr in reviewed_formal:
             iid = mr.get("iid")
-            if iid:
+            mr_author = (mr.get("author", {}).get("username") or "").lower()
+            if iid and author.lower() != mr_author:
                 reviewed_by[author.lower()][iid] = mr
 
         seen_iids: set = set()
@@ -233,6 +234,7 @@ def gitlab_mrs(
             "additions":    stats.get("additions"),
             "deletions":    stats.get("deletions"),
             "changedFiles": stats.get("changedFiles"),
+            "notesCount":   mr.get("user_notes_count", 0),
             "project":      ref.rsplit("!", 1)[0] if ref else project,
         }
 
@@ -242,16 +244,20 @@ def gitlab_mrs(
         user_reviewed = list(reviewed_by.get(author.lower(), {}).values())
 
         if ad is None:
+            reviewed_mapped = [_map_mr(mr, diff_stats) for mr in user_reviewed]
             metrics[author] = {
                 "mrsOpened": 0, "mrsMerged": 0, "mrsReviewed": len(user_reviewed),
                 "avgCycleTimeDays": None,
                 "avgLinesChanged": None,
                 "avgFilesChanged": None,
+                "reviewNotes": sum(m.get("notesCount", 0) for m in reviewed_mapped),
                 "authoredMRs": [],
-                "reviewedMRs": [_map_mr(mr, diff_stats) for mr in user_reviewed],
+                "reviewedMRs": reviewed_mapped,
             }
             continue
 
+        authored_mapped = [_map_mr(mr, diff_stats) for mr in ad["all_authored"]]
+        reviewed_mapped = [_map_mr(mr, diff_stats) for mr in user_reviewed]
         merged_mapped = [_map_mr(mr, diff_stats) for mr in ad["merged_in_range"]]
         lines_arr = [(m.get("additions") or 0) + (m.get("deletions") or 0)
                      for m in merged_mapped
@@ -265,8 +271,9 @@ def gitlab_mrs(
             "avgCycleTimeDays": ad["avg_cycle"],
             "avgLinesChanged":  round(sum(lines_arr) / len(lines_arr)) if lines_arr else None,
             "avgFilesChanged":  round(sum(files_arr) / len(files_arr) * 10) / 10 if files_arr else None,
-            "authoredMRs":      [_map_mr(mr, diff_stats) for mr in ad["all_authored"]],
-            "reviewedMRs":      [_map_mr(mr, diff_stats) for mr in user_reviewed],
+            "reviewNotes":      sum(m.get("notesCount", 0) for m in reviewed_mapped),
+            "authoredMRs":      authored_mapped,
+            "reviewedMRs":      reviewed_mapped,
         }
         if ad["truncated"]:
             entry["_truncated"] = True

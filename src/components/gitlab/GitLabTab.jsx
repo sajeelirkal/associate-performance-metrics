@@ -18,6 +18,7 @@ export default function GitLabTab() {
   const [glMRListTab, setGlMRListTab] = useState('authored');
   const [glMRListSearch, setGlMRListSearch] = useState('');
   const [glMRListPage, setGlMRListPage] = useState(1);
+  const [glStatusFilter, setGlStatusFilter] = useState('all');
 
   useEffect(() => { setGlMRListPage(1); }, [activeAssociate]);
 
@@ -36,13 +37,17 @@ export default function GitLabTab() {
         if (!seen.has(key)) { seen.add(key); allItems.push({ ...mr, login }); }
       }
     }
+    let filtered = allItems;
+    if (glStatusFilter !== 'all') {
+      filtered = filtered.filter(mr => mr.state === glStatusFilter);
+    }
     const q = glMRListSearch.toLowerCase();
-    const filtered = q
-      ? allItems.filter(mr => mr.title.toLowerCase().includes(q) || mr.author.toLowerCase().includes(q) || String(mr.iid).includes(q) || (mr.project || '').toLowerCase().includes(q))
-      : allItems;
+    if (q) {
+      filtered = filtered.filter(mr => mr.title.toLowerCase().includes(q) || mr.author.toLowerCase().includes(q) || String(mr.iid).includes(q) || (mr.project || '').toLowerCase().includes(q));
+    }
     filtered.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return filtered;
-  }, [glMRMetrics, activeAssociate, associateList, ghToGl, glMRListTab, glMRListSearch]);
+  }, [glMRMetrics, activeAssociate, associateList, ghToGl, glMRListTab, glMRListSearch, glStatusFilter]);
 
   const pagedGLMRList = useMemo(() => {
     const s = (glMRListPage - 1) * PAGE_SIZE;
@@ -117,10 +122,27 @@ export default function GitLabTab() {
                     { label:'MRs Authored', tip:'Total merge requests authored during the selected period — includes MRs created in-range plus MRs created earlier but merged in-range.', value: mrAuthors.reduce((s,a) => s + (a.mrsOpened ?? 0), 0), color:'#FC6D26' },
                     { label:'MRs Merged', tip:'Merge requests that were successfully merged into the target branch during the selected period.', value: mrAuthors.reduce((s,a) => s + (a.mrsMerged ?? 0), 0), color:'var(--accent2)' },
                     { label:'Reviews Given', tip:'Merge requests where the associate was listed as a reviewer, indicating participation in code review for others\' work.', value: mrAuthors.reduce((s,a) => s + (a.mrsReviewed ?? 0), 0), color:'var(--accent4)' },
+                    { label:'Review Notes', tip:'Total discussion notes/comments on MRs the associate reviewed. Higher counts suggest more thorough code review engagement.', value: mrAuthors.reduce((s,a) => s + (a.reviewNotes ?? 0), 0), color:'#d2a8ff' },
                     { label:'Avg Cycle Time', tip:'Average number of days from MR creation to merge. Lower values suggest faster turnaround; very low values on large MRs may indicate insufficient review.', value: (() => {
                       const vals = mrAuthors.map(a => a.avgCycleTimeDays).filter(v => v != null);
                       return vals.length ? `${(vals.reduce((a,b) => a+b, 0) / vals.length).toFixed(1)}d` : '—';
                     })(), color:'var(--accent5)' },
+                    { label:'Avg Lines/MR', tip:'Average total lines changed (additions + deletions) per merged MR. Helps gauge typical MR size.', value: (() => {
+                      const vals = mrAuthors.map(a => a.avgLinesChanged).filter(v => v != null);
+                      return vals.length ? Math.round(vals.reduce((a,b) => a+b, 0) / vals.length).toLocaleString() : '—';
+                    })(), color:'#f0883e' },
+                    { label:'Avg Files/MR', tip:'Average number of files changed per merged MR. Smaller values often indicate more focused, reviewable changes.', value: (() => {
+                      const vals = mrAuthors.map(a => a.avgFilesChanged).filter(v => v != null);
+                      return vals.length ? (vals.reduce((a,b) => a+b, 0) / vals.length).toFixed(1) : '—';
+                    })(), color:'#f0883e' },
+                    { label:'Close Rate', tip:'Percentage of authored MRs that were closed without being merged. A high rate may indicate abandoned work or MRs superseded by newer ones.', value: (() => {
+                      const totalOpened = mrAuthors.reduce((s,a) => s + (a.mrsOpened ?? 0), 0);
+                      const totalClosed = mrAuthors.reduce((s,a) => {
+                        const authored = a.authoredMRs ?? [];
+                        return s + authored.filter(mr => mr.state === 'closed').length;
+                      }, 0);
+                      return totalOpened > 0 ? `${Math.round((totalClosed / totalOpened) * 100)}%` : '—';
+                    })(), color:'var(--danger)' },
                   ].map(s => (
                     <div key={s.label} className="stat-card">
                       <div className="label">{s.label}{s.tip && <InfoTip text={s.tip} />}</div>
@@ -148,15 +170,65 @@ export default function GitLabTab() {
                     </ResponsiveContainer>
                   </div>
                   <div className="chart-card">
-                    <h3>Reviews Given</h3>
+                    <h3>MR Complexity (Merged MRs)</h3>
+                    <ResponsiveContainer width="100%" height={240}>
+                      <BarChart data={mrAuthors} margin={{ top:16, right:50, left:0, bottom:0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+                        <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                        <YAxis yAxisId="lines" tick={{ fill:'#f0883e', fontSize:10 }} tickLine={false} axisLine={false} allowDecimals={false}
+                          label={{ value:'Lines', angle:-90, position:'insideLeft', fill:'#f0883e', fontSize:11, dx:-4 }} />
+                        <YAxis yAxisId="files" orientation="right" tick={{ fill:'#d29922', fontSize:10 }} tickLine={false} axisLine={false}
+                          label={{ value:'Files', angle:90, position:'insideRight', fill:'#d29922', fontSize:11, dx:4 }} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
+                        <Bar yAxisId="lines" dataKey="avgLinesChanged" name="Avg Lines Changed" fill="#f0883e" radius={[4,4,0,0]}>
+                          <LabelList dataKey="avgLinesChanged" position="top" fill="#8b949e" fontSize={10} formatter={v => v != null ? v.toLocaleString() : ''} />
+                        </Bar>
+                        <Bar yAxisId="files" dataKey="avgFilesChanged" name="Avg Files Changed" fill="#d29922" radius={[4,4,0,0]}>
+                          <LabelList dataKey="avgFilesChanged" position="top" fill="#8b949e" fontSize={10} formatter={v => v != null ? v : ''} />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="chart-card">
+                    <h3>Code Reviews Given</h3>
                     <ResponsiveContainer width="100%" height={240}>
                       <BarChart data={mrAuthors} margin={{ top:16, right:8, left:-20, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                         <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
                         <YAxis tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                         <Tooltip content={<ChartTooltip />} />
+                        <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
                         <Bar dataKey="mrsReviewed" name="MRs Reviewed" fill="var(--accent4)" radius={[4,4,0,0]}>
                           <LabelList dataKey="mrsReviewed" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                        </Bar>
+                        <Bar dataKey="reviewNotes" name="Review Notes" fill="#d2a8ff" radius={[4,4,0,0]}>
+                          <LabelList dataKey="reviewNotes" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="chart-card">
+                    <h3>Close Rate &amp; Cycle Time</h3>
+                    <ResponsiveContainer width="100%" height={240}>
+                      <BarChart data={mrAuthors.map(a => {
+                        const authored = a.authoredMRs ?? [];
+                        const closed = authored.filter(mr => mr.state === 'closed').length;
+                        return { ...a, mrsClosed: closed, closeRate: a.mrsOpened > 0 ? Math.round((closed / a.mrsOpened) * 100) : 0 };
+                      })} margin={{ top:16, right:40, left:-20, bottom:0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+                        <XAxis dataKey="displayName" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} />
+                        <YAxis yAxisId="count" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                        <YAxis yAxisId="days" orientation="right" tick={{ fill:'#8b949e', fontSize:11 }} tickLine={false} axisLine={false} unit="d" />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend wrapperStyle={{ fontSize:12, color:'#8b949e' }} />
+                        <Bar yAxisId="count" dataKey="mrsClosed" name="MRs Closed" fill="var(--danger)" radius={[4,4,0,0]}>
+                          <LabelList dataKey="mrsClosed" position="top" fill="#8b949e" fontSize={10} formatter={v => v || ''} />
+                        </Bar>
+                        <Bar yAxisId="days" dataKey="avgCycleTimeDays" name="Avg Cycle Time (d)" fill="var(--accent5)" radius={[4,4,0,0]}>
+                          <LabelList dataKey="avgCycleTimeDays" position="top" fill="#8b949e" fontSize={10} formatter={v => v != null ? `${v}d` : ''} />
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -194,7 +266,15 @@ export default function GitLabTab() {
                   {isMultiProject && <th>Project</th>}
                   <th>Author</th>
                   {!isAuthored && <th>Reviewer</th>}
-                  <th>Status</th>
+                  <th style={{ padding:0 }}>
+                    <select value={glStatusFilter} onChange={e => { setGlStatusFilter(e.target.value); setGlMRListPage(1); }}
+                      style={{ background:'transparent', color:'inherit', border:'none', font:'inherit', fontWeight:600, cursor:'pointer', padding:'8px 4px', width:'100%' }}>
+                      <option value="all">Status</option>
+                      <option value="opened">Open</option>
+                      <option value="merged">Merged</option>
+                      <option value="closed">Closed</option>
+                    </select>
+                  </th>
                   {isAuthored && <th>Code +/−</th>}
                   {isAuthored && <th>Files</th>}
                   <th>Created</th>
