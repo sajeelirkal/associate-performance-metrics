@@ -21,18 +21,19 @@
 
 ## Features
 
-- **GitHub Tab** — PR activity (opened / merged / reviewed), PR churn & cycle time charts, PR complexity metrics (avg lines/files per PR), browsable authored & reviewed PR lists with reviewer names, search and pagination, and contribution share
-- **GitLab Tab** — Merge requests (opened / merged / reviewed), avg lines & files per MR, cycle time, reviewer detection via formal assignment and merge-by attribution, browsable authored & reviewed MR lists with reviewer names
-- **Jira Tab** — Issues, sprint spillovers, cycle time, story points, status transitions, per-associate filtering on both charts and tables, and search
+- **GitHub Tab** — PR activity (opened / merged / reviewed), PR churn & cycle time charts, PR complexity metrics (avg lines/files per PR), browsable authored & reviewed PR lists with reviewer names, inline status filter, search and pagination, and contribution share
+- **GitLab Tab** — Merge requests (opened / merged / reviewed), stat cards matching the GitHub layout (Avg Lines/MR, Avg Files/MR, Review Notes, Close Rate, and more), cycle time, reviewer detection via formal assignment and merge-by attribution with self-reviews excluded, browsable authored & reviewed MR lists with inline status filter
+- **Jira Tab** — Issues, sprint spillovers, cycle time, story points, status transitions, per-associate filtering on both charts and tables, Status/Resolution filters applied to charts as well as tables, and search
 - **Performance Tab** — Unified metrics across all platforms (GitHub + GitLab + Jira), per-associate scorecards with GL Avg Lines/MR and Avg Files/MR, relative radar chart, 1:1 associate deep-dive, and full summary table
-- **Work Summary & CSV Export** — Per-associate work summary combining PR/MR activity and Jira issues, exportable as CSV for offline review
+- **CSV Export** — Every tab exports its data: GitHub metrics and PR lists, GitLab MR data, Jira issues, and the per-associate work summary combining PR/MR activity and Jira issues
 - **Settings Tab** — GitHub OAuth / PAT, Jira Cloud & Data Center config, GitLab self-managed support, date range picker, GitHub-Jira-GitLab username mapping, single "Fetch All" button, Clear Cache with confirmation
 - **Performance Ranking** *(planned)* — Configurable composite scoring with preset profiles (Balanced, Code Output, Review Focus, Delivery Speed, Custom) and individual slider adjustments for ranking weights
 - **Multi-Repository Support** — Configure multiple GitHub repositories and GitLab projects via add/remove row inputs; data from all repos/projects is merged into a single unified view
 - **Parallel Fetching** — Bounded-concurrency workers (5 for GitHub, 3 for GitLab) fetch repos/projects in parallel with phased progress UI; inactive repos are skipped for PR metrics; authenticated requests use reduced API throttle
 - **Smart Caching** — localStorage-based caching with 12-hour TTL and 4 MB size guard per entry; cache banners show data freshness with one-click refresh; Clear Cache button alongside fetch controls
 - **Demo Mode** — One-click synthetic data with a realistic performance spread for presentations and evaluation
-- **Testing** — Frontend unit tests with Vitest; backend endpoint tests with Pytest
+- **Testing** — Frontend unit tests with Vitest (GitHub, GitLab multi-project merge, cache, helpers); backend endpoint and reviewer-detection tests with Pytest
+- **Security** — Origin allowlist on the API, Docker ports bound to loopback, credentials kept in `sessionStorage`, CSP on production builds (see [Security](#security))
 - **TypeScript** — Incremental migration with shared type definitions and typed utility modules
 
 ---
@@ -212,6 +213,7 @@ GITHUB_CLIENT_SECRET=your_client_secret
 | `GITHUB_CLIENT_SECRET`| No       | —                          | GitHub OAuth App client secret                   |
 | `GH_SCOPE`            | No       | `read:user,repo`           | GitHub OAuth scopes                              |
 | `FRONTEND_ORIGIN`     | No       | `http://localhost:5173`    | Frontend URL for OAuth redirects                 |
+| `FRONTEND_ORIGINS`   | No       | value of `FRONTEND_ORIGIN` | Comma-separated browser origins allowed to call the API; set when running more than one frontend |
 | `GITLAB_SSL_VERIFY`   | No       | `false`                    | SSL verification for self-managed GitLab         |
 | `API_TARGET`          | No       | `http://localhost:8000`    | Backend URL (used by Vite proxy in Docker)        |
 
@@ -232,6 +234,18 @@ All integration configuration is done through the **Settings** tab in the UI:
 | Date range        | Calendar picker with quick presets                            |
 | Username mapping  | GitHub login <-> Jira username/email mapping table            |
 | Clear Cache       | Purges all cached GitHub, Jira, and GitLab data from localStorage |
+
+---
+
+## Security
+
+The backend and deployment defaults are hardened for local/self-hosted use:
+
+- **Origin allowlist** — Browser requests carrying an `Origin` outside the configured allowlist are rejected with `403` before any handler runs. Non-browser clients (curl, the Vite proxy) send no `Origin` and are unaffected. CORS is likewise restricted to the allowlist, `GET`/`POST` methods, and a fixed set of headers.
+- **Loopback-only Docker ports** — Both dev and production compose files bind published ports to `127.0.0.1`, so the app is not exposed to the network by default. Put it behind a reverse proxy if you need external access.
+- **Credential storage** — Integration tokens entered in Settings are kept in `sessionStorage`, so they are cleared when the tab closes rather than persisting in `localStorage`.
+- **Content Security Policy** — Production builds inject a CSP `<meta>` tag into `index.html` via a Vite plugin.
+- **Input validation** — Repository/project inputs and Jira JQL date ranges are validated before use.
 
 ---
 
@@ -309,7 +323,7 @@ associate-performance-metrics/
 │   │   ├── performance/PerformanceTab.jsx  # Cross-platform performance view
 │   │   ├── settings/SettingsPage.jsx       # Configuration & integrations
 │   │   ├── layout/StatusBar.jsx    # Bottom status bar
-│   │   └── shared/                 # Reusable UI components (icons, tooltips, pagination)
+│   │   └── shared/                 # Reusable UI components (icons, tooltips, pagination) and hooks (usePagedList, usePersistentState)
 │   ├── utils/
 │   │   ├── cache.ts            # localStorage caching with TTL & size guard
 │   │   └── helpers.ts          # Shared utility functions
