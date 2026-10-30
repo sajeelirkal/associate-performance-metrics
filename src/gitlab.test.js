@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeMetricsEntry } from './gitlab';
+import { mergeMetricsEntry } from './utils/helpers';
 
 describe('mergeMetricsEntry', () => {
   it('returns a copy of data when existing is null/undefined', () => {

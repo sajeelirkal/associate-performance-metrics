@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import HTTPException
 from jira import JIRA
 
-from .shared import SESSION, _DirectAdapter, is_network_error
+from .shared import SESSION, is_network_error
 
 log = logging.getLogger(__name__)
 
@@ -33,9 +33,7 @@ def make_jira(url: str, token: str, email: Optional[str] = None) -> JIRA:
     else:
         j = JIRA(server=url, token_auth=token, get_server_info=False,
                  options={"verify": True, "headers": {"Authorization": f"Bearer {token}"}})
-    j._session.trust_env = False
-    j._session.mount("http://",  _DirectAdapter())
-    j._session.mount("https://", _DirectAdapter())
+    j._session.trust_env = False  # connect directly, same as shared SESSION
     return j
 
 
@@ -94,7 +92,7 @@ def search_cloud(base_url: str, auth_headers: dict, jql: str,
         log.debug("cloud search got=%d total_so_far=%d", len(batch), len(all_issues))
 
         next_page_token = page.get("nextPageToken")
-        if not batch or not next_page_token or len(all_issues) >= 500:
+        if not batch or not next_page_token or len(all_issues) >= 2000:
             break
 
     return all_issues
@@ -122,7 +120,7 @@ def search_dc(jira: JIRA, jql: str, issue_fields: list = None) -> list:
         all_issues.extend(batch)
         start += len(batch)
 
-        if not batch or start >= total or len(all_issues) >= 500:
+        if not batch or start >= total or len(all_issues) >= 2000:
             break
 
     return all_issues

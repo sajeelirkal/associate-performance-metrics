@@ -1,3 +1,5 @@
+import { apiFetch } from './utils/helpers';
+
 /**
  * Jira data layer — all calls go to the local Python backend at /api.
  *
@@ -6,51 +8,17 @@
  * Cloud mode; omit it (or pass '') for Data Center.
  */
 
-async function backendFetch(path, jiraUrl, token, email, params = {}) {
-  const url = new URL(`/api${path}`, window.location.origin);
-  Object.entries(params).forEach(([k, v]) => {
-    if (v != null && v !== '') url.searchParams.set(k, String(v));
-  });
-
+function backendFetch(path, jiraUrl, token, email, params = {}, { timeoutMs } = {}) {
   const headers = {
     'X-Jira-Url':   jiraUrl,
     'X-Jira-Token': token,
   };
   if (email) headers['X-Jira-Email'] = email;
-
-  let res;
-  try {
-    res = await fetch(url.toString(), { headers, cache: 'no-store' });
-  } catch {
-    throw new Error(
-      'Cannot reach the Python backend at localhost:8000.\n' +
-      'Run this in a terminal:\n' +
-      '  cd associate-performance-metrics/backend\n' +
-      '  uvicorn main:app --reload --port 8000'
-    );
-  }
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    let detail = `HTTP ${res.status}`;
-    try {
-      const body = JSON.parse(text);
-      detail = body.detail || body.message || detail;
-    } catch {
-      if (text) detail = text.slice(0, 400);
-    }
-    throw new Error(detail);
-  }
-  return res.json();
+  return apiFetch(path, headers, params, { timeoutMs });
 }
 
-export async function checkBackendHealth() {
-  try {
-    const res = await fetch('/api/health', { signal: AbortSignal.timeout(4000) });
-    return res.ok;
-  } catch {
-    return false;
-  }
+export function testJiraConnection(jiraUrl, token, email) {
+  return backendFetch('/test', jiraUrl, token, email, {}, { timeoutMs: 10000 });
 }
 
 /**
@@ -158,12 +126,22 @@ export function extractStatusTransitions(changelog) {
 function extractComments(fields) {
   const raw = fields.comment?.comments ?? fields.comment?.body ?? [];
   const comments = Array.isArray(raw) ? raw : [];
-  return comments.map(c => ({
-    author:      c.author?.displayName ?? c.author?.name ?? '—',
-    authorId:    c.author?.accountId ?? c.author?.name ?? '',
-    authorEmail: c.author?.emailAddress ?? '',
-    date:        c.created,
-  }));
+  return comments.map(c => {
+    let body = '';
+    if (typeof c.body === 'string') body = c.body;
+    else if (c.body?.content) {
+      body = c.body.content
+        .map(node => node.content?.map(n => n.text || '').join('') || '')
+        .join('\n').trim();
+    }
+    return {
+      author:      c.author?.displayName ?? c.author?.name ?? '—',
+      authorId:    c.author?.accountId ?? c.author?.name ?? '',
+      authorEmail: c.author?.emailAddress ?? '',
+      date:        c.created,
+      body:        body.slice(0, 500),
+    };
+  });
 }
 
 // ── Normalise raw Jira issue → flat object ────────────────────────────────────
@@ -197,6 +175,13 @@ export function normaliseIssue(raw, spField = null) {
     key:             raw.key,
     url:             `${raw.self.split('/rest/')[0]}/browse/${raw.key}`,
     summary:         f.summary,
+    description:     (() => {
+      const d = f.description;
+      if (!d) return '';
+      if (typeof d === 'string') return d.slice(0, 500);
+      if (d.content) return d.content.map(node => node.content?.map(n => n.text || '').join('') || '').join('\n').trim().slice(0, 500);
+      return '';
+    })(),
     status:          f.status?.name ?? '—',
     statusCategory:  f.status?.statusCategory?.name ?? '',
     priority:        f.priority?.name ?? '—',

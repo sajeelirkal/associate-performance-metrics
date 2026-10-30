@@ -2,16 +2,16 @@ import { useAppContext } from '../../context/AppContext';
 import { GitHubIcon, JiraIcon, GitLabIcon, CalendarIcon } from '../shared';
 import { COLORS, QUICK_RANGES, buildQuarterRanges } from '../../utils/helpers';
 import { clearAllCaches } from '../../utils/cache';
-import DatePicker from 'react-datepicker';
-import 'react-datepicker/dist/react-datepicker.css';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 
 const QUARTER_RANGES = buildQuarterRanges();
+// Header and rows are separate grids, so trailing columns need fixed widths to line up.
+const MAPPING_COLS = '1fr 1fr 1fr 160px 90px 24px';
 
 export default function SettingsPage() {
   const {
     sinceDate, setSinceDate, untilDate, setUntilDate, applyQuickRange,
-    token, setToken, ghRepo, oauthAvailable, backendUp,
+    token, setToken, oauthAvailable, backendUp,
     ghOAuthSuccess, ghRepoRows, setGhRepoRow, addGhRepoRow, removeGhRepoRow,
     associates, setAssociates, associateList, userMapping,
     jiraBase, setJiraBase, jiraEmail, setJiraEmail, jiraApiKey, setJiraApiKey,
@@ -38,24 +38,16 @@ export default function SettingsPage() {
         <div className="settings-grid">
           <div className="field">
             <label>From</label>
-            <DatePicker
-              selected={sinceDate}
-              onChange={d => d && setSinceDate(d)}
-              selectsStart startDate={sinceDate} endDate={untilDate} maxDate={untilDate}
-              dateFormat="MMM d, yyyy"
-              className="input dp-input" calendarClassName="dp-calendar"
-            />
+            <input type="date" className="input date-input"
+              value={format(sinceDate, 'yyyy-MM-dd')} max={format(untilDate, 'yyyy-MM-dd')}
+              onChange={e => e.target.value && setSinceDate(parseISO(e.target.value))} />
           </div>
           <div className="field">
             <label>To</label>
-            <DatePicker
-              selected={untilDate}
-              onChange={d => d && setUntilDate(d)}
-              selectsEnd startDate={sinceDate} endDate={untilDate}
-              minDate={sinceDate} maxDate={new Date()}
-              dateFormat="MMM d, yyyy"
-              className="input dp-input" calendarClassName="dp-calendar"
-            />
+            <input type="date" className="input date-input"
+              value={format(untilDate, 'yyyy-MM-dd')}
+              min={format(sinceDate, 'yyyy-MM-dd')} max={format(new Date(), 'yyyy-MM-dd')}
+              onChange={e => e.target.value && setUntilDate(parseISO(e.target.value))} />
           </div>
           <div className="field" style={{ gridColumn: '1 / -1' }}>
             <label>Quick select</label>
@@ -111,7 +103,7 @@ export default function SettingsPage() {
                 <button
                   className="link-btn"
                   style={{ fontSize:12, color:'var(--danger)' }}
-                  onClick={() => { setToken(''); localStorage.removeItem('gh_token'); }}
+                  onClick={() => setToken('')}
                 >
                   Disconnect
                 </button>
@@ -283,10 +275,11 @@ export default function SettingsPage() {
           The display name is shown in the UI — the underlying Cloud accountId is stored automatically.
         </p>
         <div className="mapping-table">
-          <div className="mapping-header" style={{ gridTemplateColumns:'1fr 1fr 1fr auto auto' }}>
+          <div className="mapping-header" style={{ gridTemplateColumns:MAPPING_COLS, padding:'7px 16px' }}>
             <span>GitHub Username</span>
             <span>GitLab Username</span>
             <span>Jira Username</span>
+            <span>Level</span>
             <span/>
             <span/>
           </div>
@@ -295,7 +288,7 @@ export default function SettingsPage() {
             const resolved = !!row.jiraDisplay;
             return (
               <div key={i} style={{ display:'contents' }}>
-                <div className="mapping-row" style={{ gridColumn:'1 / -1', display:'grid', gridTemplateColumns:'1fr 1fr 1fr auto auto', gap:8, alignItems:'start', padding:'6px 16px' }}>
+                <div className="mapping-row" style={{ gridColumn:'1 / -1', display:'grid', gridTemplateColumns:MAPPING_COLS, gap:8, alignItems:'start', padding:'6px 16px' }}>
                   <input className="input" placeholder="github-login" value={row.github}
                     onChange={e => updateMapping(i,'github',e.target.value)} />
                   <input className="input" placeholder="gitlab-login (optional)" value={row.gitlab || ''}
@@ -324,6 +317,14 @@ export default function SettingsPage() {
                     <input className="input" placeholder="Search name/email then click Lookup" value={row.jira}
                       onChange={e => { updateMapping(i,'jira',e.target.value); setLookupState(s => ({ ...s, [i]: undefined })); }} />
                   )}
+                  <input
+                    className="input"
+                    list="level-suggestions"
+                    placeholder="e.g. Senior SRE"
+                    value={row.level || ''}
+                    onChange={e => updateMapping(i,'level',e.target.value)}
+                    style={{ fontSize:12 }}
+                  />
                   <button
                     className="btn btn-outline"
                     style={{ padding:'4px 10px', fontSize:12, whiteSpace:'nowrap' }}
@@ -370,7 +371,24 @@ export default function SettingsPage() {
           {mappings.length === 0 && (
             <div style={{ padding:'14px 16px', color:'var(--text-muted)', fontSize:13 }}>No mappings — click "+ Add row"</div>
           )}
+          <div style={{ padding:'6px 16px 10px', fontSize:11, color:'var(--text-muted)' }}>
+            Level is optional — type a title or pick from suggestions. Custom values are accepted.
+          </div>
         </div>
+        <datalist id="level-suggestions">
+          <option value="Associate Site Reliability Engineer" />
+          <option value="Site Reliability Engineer" />
+          <option value="Senior Site Reliability Engineer" />
+          <option value="Staff Site Reliability Engineer" />
+          <option value="Principal Site Reliability Engineer" />
+          <option value="Associate Software Engineer" />
+          <option value="Software Engineer" />
+          <option value="Senior Software Engineer" />
+          <option value="Staff Software Engineer" />
+          <option value="Principal Software Engineer" />
+          <option value="Manager" />
+          <option value="Senior Manager" />
+        </datalist>
       </section>
 
       <section className="settings-section">

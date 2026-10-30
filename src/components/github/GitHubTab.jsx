@@ -1,11 +1,11 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, LabelList,
 } from 'recharts';
 import { useAppContext } from '../../context/AppContext';
-import { GitHubIcon, ChartTooltip, Pagination, InfoTip } from '../shared';
-import { COLORS, PAGE_SIZE, PR_CHURN_TIP, fmtDate } from '../../utils/helpers';
+import { GitHubIcon, ChartTooltip, Pagination, InfoTip, usePagedList } from '../shared';
+import { COLORS, PR_CHURN_TIP, fmtDate, downloadCSV } from '../../utils/helpers';
 
 export default function GitHubTab() {
   const {
@@ -16,11 +16,8 @@ export default function GitHubTab() {
   } = useAppContext();
 
   const [prListSearch, setPrListSearch] = useState('');
-  const [prListPage, setPrListPage] = useState(1);
   const [prListTab, setPrListTab] = useState('authored');
   const [prStatusFilter, setPrStatusFilter] = useState('all');
-
-  useEffect(() => { setPrListPage(1); }, [activeAssociate]);
 
   const prListItems = useMemo(() => {
     const logins = activeAssociate
@@ -56,11 +53,33 @@ export default function GitHubTab() {
     return logins.some(l => prMetrics[l]?._rateLimited);
   }, [prMetrics, activeAssociate, associateList]);
 
-  const pagedPRList = useMemo(() => {
-    const s = (prListPage - 1) * PAGE_SIZE;
-    return prListItems.slice(s, s + PAGE_SIZE);
-  }, [prListItems, prListPage]);
-  const prListTotalPages = Math.ceil(prListItems.length / PAGE_SIZE);
+  const { page: prListPage, setPage: setPrListPage, paged: pagedPRList, totalPages: prListTotalPages } = usePagedList(prListItems, activeAssociate);
+
+  const downloadMetricsCSV = useCallback(() => {
+    const logins = activeAssociate ? [activeAssociate] : associateList;
+    const rows = [['Associate', 'PRs Opened', 'PRs Merged', 'Reviews Given', 'Review Comments', 'Avg Cycle Time (d)', 'Avg Lines/PR', 'Avg Files/PR', 'Churn %']];
+    for (const login of logins) {
+      const m = prMetrics[login?.toLowerCase()];
+      if (!m) continue;
+      rows.push([ghDisplayName(login), m.prsOpened ?? 0, m.prsMerged ?? 0, m.prsReviewed ?? 0, m.reviewComments ?? 0, m.avgCycleTimeDays ?? '', m.avgLinesChanged ?? '', m.avgFilesChanged ?? '', m.churnPct ?? '']);
+    }
+    downloadCSV(`github-metrics${activeAssociate ? `-${activeAssociate}` : ''}.csv`, rows);
+  }, [prMetrics, activeAssociate, associateList, ghDisplayName]);
+
+  const downloadPRListCSV = useCallback(() => {
+    const isAuthored = prListTab === 'authored';
+    const header = isAuthored
+      ? ['#', 'Title', 'Repo', 'Author', 'Status', 'Additions', 'Deletions', 'Files', 'Created', 'Merged', 'URL']
+      : ['#', 'Title', 'Repo', 'Author', 'Reviewer', 'Status', 'Created', 'URL'];
+    const rows = [header];
+    for (const pr of prListItems) {
+      rows.push(isAuthored
+        ? [pr.number, pr.title, pr.repo || '', pr.author, pr.state, pr.additions ?? '', pr.deletions ?? '', pr.changedFiles ?? '', pr.createdAt?.slice(0, 10) || '', pr.mergedAt?.slice(0, 10) || '', pr.url || '']
+        : [pr.number, pr.title, pr.repo || '', pr.author, ghDisplayName(pr.login), pr.state, pr.createdAt?.slice(0, 10) || '', pr.url || '']
+      );
+    }
+    downloadCSV(`github-${prListTab}-prs${activeAssociate ? `-${activeAssociate}` : ''}.csv`, rows);
+  }, [prListItems, prListTab, activeAssociate, ghDisplayName]);
 
   return (
     <>
@@ -130,7 +149,10 @@ export default function GitHubTab() {
                     Verify the GitHub usernames in the mapping table match their GitHub accounts, and that the date range covers their activity.
                   </div>
                 )}
-                <div className="stats-grid" style={{ marginTop:8 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8, marginBottom: 4 }}>
+                  <button className="btn btn-outline" style={{ padding: '4px 12px', fontSize: 12 }} onClick={downloadMetricsCSV}>↓ Download Metrics CSV</button>
+                </div>
+                <div className="stats-grid" style={{ marginTop:4 }}>
                   {[
                     { label:'PRs Opened',    value: prRows.reduce((s,r)=>s+(r.prsOpened??0),0),   color:'var(--accent)' },
                     { label:'PRs Merged',    value: prRows.reduce((s,r)=>s+(r.prsMerged??0),0),   color:'var(--accent2)' },
@@ -256,8 +278,11 @@ export default function GitHubTab() {
                 </span>
                 {' '}<span className="badge">{prListItems.length}</span>
               </h3>
-              <input className="input" type="text" placeholder="Search title, author, repo, or #…"
-                value={prListSearch} onChange={e => { setPrListSearch(e.target.value); setPrListPage(1); }} style={{ width:280 }} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input className="input" type="text" placeholder="Search title, author, repo, or #…"
+                  value={prListSearch} onChange={e => { setPrListSearch(e.target.value); setPrListPage(1); }} style={{ width:280 }} />
+                <button className="btn btn-outline" style={{ padding: '4px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={downloadPRListCSV}>↓ CSV</button>
+              </div>
             </div>
             {prListRateLimited && (
               <div style={{ padding:'6px 14px', fontSize:12, color:'var(--accent5)', background:'rgba(210,168,255,0.08)', borderBottom:'1px solid var(--border)' }}>

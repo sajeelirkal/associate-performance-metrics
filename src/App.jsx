@@ -12,8 +12,7 @@ import './App.css';
 function AppShell() {
   const {
     tab, setTab, switchTab,
-    demoMode, jiraTestStatus, jiraTestMsg,
-    sinceDate, untilDate,
+    demoMode,
   } = useAppContext();
 
   return (
@@ -44,7 +43,7 @@ function AppShell() {
             { id: 'github',      label: 'GitHub',      icon: <GitHubIcon size={15} /> },
             { id: 'gitlab',      label: 'GitLab',      icon: <GitLabIcon size={15} /> },
             { id: 'jira',        label: 'Jira',         icon: <JiraIcon size={15} /> },
-            { id: 'performance', label: 'Performance',  icon: <span style={{fontSize:14}}>📊</span> },
+            { id: 'performance', label: 'Metrics',      icon: <span style={{fontSize:14}}>📊</span> },
             { id: 'settings',    label: 'Settings',     icon: <span style={{fontSize:14}}>⚙️</span> },
           ].map(t => (
             <button key={t.id} className={`tab-btn ${tab === t.id ? 'active' : ''}`} onClick={() => switchTab(t.id)}>
@@ -68,12 +67,6 @@ function AppShell() {
         )}
 
         {tab !== 'settings' && tab !== 'home' && <StatusBar />}
-
-        {jiraTestStatus && tab !== 'settings' && (
-          <div className={`alert ${jiraTestStatus === 'ok' ? 'alert-info' : 'alert-error'}`} style={{ marginBottom:16 }}>
-            {jiraTestStatus === 'ok' ? '✓ ' : '✗ '}{jiraTestMsg}
-          </div>
-        )}
 
         {tab === 'settings' && <SettingsPage />}
         {tab === 'github' && <GitHubTab />}
