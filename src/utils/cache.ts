@@ -5,11 +5,11 @@ export const JIRA_CACHE_KEY = 'jira_cache';
 export const GL_CACHE_KEY = 'gl_cache';
 export const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 export const CACHE_MAX_BYTES = 4 * 1024 * 1024;
-export const CACHE_VERSION = 1;
+export const CACHE_VERSION = 2;
 
-export const cacheLog: (...args: unknown[]) => void =
+const cacheLog: (...args: unknown[]) => void =
   import.meta.env.DEV ? console.log.bind(console) : () => {};
-export const cacheWarn: (...args: unknown[]) => void =
+const cacheWarn: (...args: unknown[]) => void =
   import.meta.env.DEV ? console.warn.bind(console) : () => {};
 
 export function normAssociateKey(raw: string): string {
@@ -81,33 +81,19 @@ export function saveCache(
   }
 }
 
-export function stripPRListsForCache(prMetrics: Record<string, unknown>): Record<string, unknown> {
+/** Drop the bulky per-person PR/MR lists so the cached copy fits in localStorage. */
+export function stripListsForCache(metrics: Record<string, unknown>, listKeys: string[]): Record<string, unknown> {
   const slim: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(prMetrics)) {
-    if (k === '_rateLimited') { slim[k] = v; continue; }
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const obj = v as Record<string, unknown>;
-      const { authoredPRs, reviewedPRs, ...rest } = obj;
-      slim[k] = rest;
-    } else { slim[k] = v; }
-  }
-  return slim;
-}
-
-export function stripMRListsForCache(mrMetrics: Record<string, unknown>): Record<string, unknown> {
-  const slim: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(mrMetrics)) {
-    if (v && typeof v === 'object') {
-      const obj = v as Record<string, unknown>;
-      const { authoredMRs, reviewedMRs, ...rest } = obj;
-      slim[k] = rest;
-    } else { slim[k] = v; }
+  for (const [k, v] of Object.entries(metrics)) {
+    slim[k] = v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).filter(([key]) => !listKeys.includes(key)))
+      : v;
   }
   return slim;
 }
 
 export function clearAllCaches(): void {
-  try { localStorage.removeItem(GH_CACHE_KEY); } catch { /* ignore */ }
-  try { localStorage.removeItem(JIRA_CACHE_KEY); } catch { /* ignore */ }
-  try { localStorage.removeItem(GL_CACHE_KEY); } catch { /* ignore */ }
+  for (const k of [GH_CACHE_KEY, JIRA_CACHE_KEY, GL_CACHE_KEY]) {
+    try { localStorage.removeItem(k); } catch { /* ignore */ }
+  }
 }

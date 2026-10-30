@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   normAssociateKey, loadCache, saveCache,
-  stripPRListsForCache, stripMRListsForCache, clearAllCaches,
+  stripListsForCache, clearAllCaches,
   GH_CACHE_KEY, JIRA_CACHE_KEY, GL_CACHE_KEY,
   CACHE_TTL_MS, CACHE_VERSION,
 } from './cache';
@@ -94,26 +94,24 @@ describe('saveCache', () => {
   });
 });
 
-describe('stripPRListsForCache', () => {
+describe('stripListsForCache', () => {
   it('strips authoredPRs and reviewedPRs', () => {
     const input = {
       user1: { prsOpened: 5, authoredPRs: [1,2,3], reviewedPRs: [4,5] },
       _rateLimited: false,
     };
-    const result = stripPRListsForCache(input);
+    const result = stripListsForCache(input, ['authoredPRs', 'reviewedPRs']);
     expect(result.user1.prsOpened).toBe(5);
     expect(result.user1.authoredPRs).toBeUndefined();
     expect(result.user1.reviewedPRs).toBeUndefined();
     expect(result._rateLimited).toBe(false);
   });
-});
 
-describe('stripMRListsForCache', () => {
   it('strips authoredMRs and reviewedMRs', () => {
     const input = {
       user1: { mrsOpened: 3, authoredMRs: [1,2], reviewedMRs: [3] },
     };
-    const result = stripMRListsForCache(input);
+    const result = stripListsForCache(input, ['authoredMRs', 'reviewedMRs']);
     expect(result.user1.mrsOpened).toBe(3);
     expect(result.user1.authoredMRs).toBeUndefined();
     expect(result.user1.reviewedMRs).toBeUndefined();

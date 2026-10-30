@@ -384,6 +384,25 @@ class TestJiraIssues:
         })
         assert res.status_code == 422
 
+    def test_invalid_date_is_rejected_before_jira_call(self):
+        res = client.get("/api/issues", params={
+            "usernames": "user1",
+            "since": '2025-01-01" OR assignee is not EMPTY',
+        }, headers={"X-Jira-Url": "https://jira.example", "X-Jira-Token": "tok"})
+        assert res.status_code == 422
+        assert "since must be YYYY-MM-DD" in res.json()["detail"]
+
+
+class TestCors:
+    def test_allowed_origin_is_reflected(self):
+        res = client.get("/api/health", headers={"Origin": "http://localhost:5173"})
+        assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+    def test_unknown_origin_is_rejected_before_handler(self):
+        res = client.get("/api/health", headers={"Origin": "http://evil.example"})
+        assert res.status_code == 403
+        assert "access-control-allow-origin" not in res.headers
+
 
 # ── Jira resolve-user ────────────────────────────────────────────────────────
 

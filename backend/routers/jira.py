@@ -1,6 +1,7 @@
 """Jira endpoints: connection test, user resolution, issue search, remote links."""
 
 import logging
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -16,6 +17,18 @@ from services.jira_client import (
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["jira"])
+
+
+def _jql_quote(value: str) -> str:
+    """Quote a JQL string literal, escaping backslashes and double quotes."""
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _jql_date(value: str, name: str) -> str:
+    """Validate an ISO date and convert it to the JQL YYYY/MM/DD form."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise HTTPException(status_code=422, detail=f"{name} must be YYYY-MM-DD")
+    return value.replace("-", "/")
 
 
 @router.get("/test")
@@ -112,30 +125,38 @@ def get_issues(
     if not user_list:
         return {"issues": [], "total": 0}
 
+    # Validate dates before any external request; they are interpolated into JQL.
+    start_date = _jql_date(since, "since") if since else None
+    end_date = _jql_date(until, "until") if until else None
+
     cloud = bool(x_jira_email) or is_cloud(x_jira_url)
 
     try:
-        resolved = [resolve_to_account_id(x_jira_url, x_jira_token, x_jira_email, u) for u in user_list]
+        resolved = [resolve_to_account_id(x_jira_url, x_jira_token, x_jira_email, value) for value in user_list]
         log.info("username mapping: %s → %s (cloud=%s)", user_list, resolved, cloud)
 
-        user_jql = ", ".join(f'"{u}"' for u in resolved)
+        user_jql = ", ".join(_jql_quote(value) for value in resolved)
 
-        if since or until:
-            s = since.replace("-", "/") if since else None
-            u = until.replace("-", "/") if until else None
+        if start_date or end_date:
+            done_filter = '(statusCategory = Done OR status in (Closed, Resolved))'
+            open_filter = '(statusCategory != Done AND status not in (Closed, Resolved))'
 
-            done_clauses = ['statusCategory = Done']
-            open_clauses = ['statusCategory != Done']
+            done_date_parts = []
+            if start_date:
+                done_date_parts.append(f'(resolutiondate >= "{start_date}" OR (resolutiondate is EMPTY AND updated >= "{start_date}"))')
+            if end_date:
+                done_date_parts.append(f'(resolutiondate <= "{end_date}" OR (resolutiondate is EMPTY AND updated <= "{end_date}"))')
+            done_date = (" AND ".join(done_date_parts)) if done_date_parts else ""
 
-            if s:
-                done_clauses.append(f'resolutiondate >= "{s}"')
-                open_clauses.append(f'created >= "{s}"')
-            if u:
-                done_clauses.append(f'resolutiondate <= "{u}"')
-                open_clauses.append(f'created <= "{u}"')
+            open_date_parts = []
+            if start_date:
+                open_date_parts.append(f'created >= "{start_date}"')
+            if end_date:
+                open_date_parts.append(f'created <= "{end_date}"')
+            open_date = (" AND ".join(open_date_parts)) if open_date_parts else ""
 
-            done_part = " AND ".join(done_clauses)
-            open_part = " AND ".join(open_clauses)
+            done_part = f'{done_filter}{" AND " + done_date if done_date else ""}'
+            open_part = f'{open_filter}{" AND " + open_date if open_date else ""}'
             date_filter = f"(({done_part}) OR ({open_part}))"
             jql = f"assignee in ({user_jql}) AND {date_filter}"
         else:

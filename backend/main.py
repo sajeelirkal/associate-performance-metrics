@@ -16,20 +16,39 @@ load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-from services.shared import GH_CLIENT_ID, GH_CLIENT_SECRET
+from services.shared import GH_CLIENT_ID, GH_CLIENT_SECRET, FRONTEND_ORIGINS
 from routers import github, jira, gitlab
 
-logging.basicConfig(level=logging.DEBUG,
+logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)-8s %(message)s")
 
 app = FastAPI(title="Associate Performance Metrics — Backend")
 
+
+@app.middleware("http")
+async def reject_untrusted_origins(request, call_next):
+    """Reject browser requests from origins outside the allowlist.
+
+    CORS only hides responses; this stops the request from running at all.
+    Non-browser clients (curl, the Vite proxy) send no Origin and still work.
+    """
+    origin = request.headers.get("origin")
+    if origin and origin not in FRONTEND_ORIGINS:
+        return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=FRONTEND_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=[
+        "Content-Type",
+        "X-Jira-Url", "X-Jira-Token", "X-Jira-Email",
+        "X-GitLab-Url", "X-GitLab-Token", "X-GitLab-Project",
+    ],
 )
 
 

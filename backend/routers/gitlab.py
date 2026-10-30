@@ -246,7 +246,7 @@ def gitlab_mrs(
         if ad is None:
             reviewed_mapped = [_map_mr(mr, diff_stats) for mr in user_reviewed]
             metrics[author] = {
-                "mrsOpened": 0, "mrsMerged": 0, "mrsReviewed": len(user_reviewed),
+                "mrsOpened": 0, "mrsMerged": 0, "mrsClosedUnmerged": 0, "mrsReviewed": len(user_reviewed),
                 "avgCycleTimeDays": None,
                 "avgLinesChanged": None,
                 "avgFilesChanged": None,
@@ -267,6 +267,8 @@ def gitlab_mrs(
         entry = {
             "mrsOpened":        len(ad["all_authored"]),
             "mrsMerged":        len(ad["merged_in_range"]),
+            # Closed without ever merging — abandoned/rejected work.
+            "mrsClosedUnmerged": sum(1 for m in authored_mapped if m["state"] == "closed"),
             "mrsReviewed":      len(user_reviewed),
             "avgCycleTimeDays": ad["avg_cycle"],
             "avgLinesChanged":  round(sum(lines_arr) / len(lines_arr)) if lines_arr else None,

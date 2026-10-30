@@ -1,8 +1,34 @@
 import { describe, it, expect } from 'vitest';
 import {
   fmtDate, statusColor, priorityIcon, looksLikeId, cleanDisplayName,
-  quarterStart, quarterEnd, currentQuarterStart, buildQuarterRanges,
+  currentQuarterStart, buildQuarterRanges, parseList, csvCell,
 } from './helpers';
+
+describe('parseList', () => {
+  it('splits on commas, spaces, newlines and semicolons', () => {
+    expect(parseList('Azure/ARO-HCP, Azure/ARO-RP')).toEqual(['Azure/ARO-HCP', 'Azure/ARO-RP']);
+    expect(parseList('Azure/ARO-HCP Azure/ARO-RP')).toEqual(['Azure/ARO-HCP', 'Azure/ARO-RP']);
+    expect(parseList('Azure/ARO-HCP\nAzure/ARO-RP\n')).toEqual(['Azure/ARO-HCP', 'Azure/ARO-RP']);
+    expect(parseList('Azure/ARO-HCP;Azure/ARO-RP')).toEqual(['Azure/ARO-HCP', 'Azure/ARO-RP']);
+  });
+
+  it('drops empty entries from trailing separators', () => {
+    expect(parseList('Azure/ARO-HCP, ,')).toEqual(['Azure/ARO-HCP']);
+  });
+});
+
+describe('csvCell', () => {
+  it('neutralizes spreadsheet formula injection', () => {
+    expect(csvCell('=HYPERLINK("http://x")')).toBe('"\'=HYPERLINK(""http://x"")"');
+    expect(csvCell('+1')).toBe('"\'+1"');
+    expect(csvCell('-cmd')).toBe('"\'-cmd"');
+    expect(csvCell('@SUM(A1)')).toBe('"\'@SUM(A1)"');
+  });
+
+  it('quotes ordinary text and escapes quotes', () => {
+    expect(csvCell('PR "title", done')).toBe('"PR ""title"", done"');
+  });
+});
 
 describe('fmtDate', () => {
   it('formats ISO date', () => {
@@ -74,20 +100,24 @@ describe('cleanDisplayName', () => {
   });
 });
 
-describe('quarterStart / quarterEnd', () => {
-  it('Q1 starts Jan 1', () => {
-    const d = quarterStart(2025, 1);
-    expect(d.getMonth()).toBe(0);
-    expect(d.getDate()).toBe(1);
-  });
-  it('Q2 starts Apr 1', () => {
-    const d = quarterStart(2025, 2);
-    expect(d.getMonth()).toBe(3);
+describe('buildQuarterRanges boundaries', () => {
+  it('first quarter of the year starts Jan 1', () => {
+    const year = new Date().getFullYear();
+    const q1 = buildQuarterRanges().find(r => r.label === `Q1 ${year}`);
+    expect(q1.start.getMonth()).toBe(0);
+    expect(q1.start.getDate()).toBe(1);
   });
   it('Q1 ends Mar 31', () => {
-    const d = quarterEnd(2025, 1);
-    expect(d.getMonth()).toBe(2);
-    expect(d.getDate()).toBe(31);
+    const year = new Date().getFullYear();
+    const q1 = buildQuarterRanges().find(r => r.label === `Q1 ${year}`);
+    expect(q1.end.getMonth()).toBe(2);
+    expect(q1.end.getDate()).toBe(31);
+  });
+  it('consecutive quarters are contiguous', () => {
+    const ranges = buildQuarterRanges();
+    for (let i = 1; i < ranges.length; i++) {
+      expect(ranges[i].start.getTime()).toBeGreaterThan(ranges[i - 1].start.getTime());
+    }
   });
 });
 

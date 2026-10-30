@@ -10,11 +10,11 @@
  */
 
 export const DEMO_MAPPINGS = [
-  { github: 'alice-dev', jira: 'alice.smith'  },
-  { github: 'bob-codes', jira: 'bob.jones'    },
-  { github: 'carol-eng', jira: 'carol.wilson' },
-  { github: 'eve-cloud',  jira: 'eve.taylor'   },
-  { github: 'dave-hcp',  jira: 'dave.brown'   },
+  { github: 'alice-dev', jira: 'alice.smith',  level: 'Principal Site Reliability Engineer' },
+  { github: 'bob-codes', jira: 'bob.jones',    level: 'Senior Site Reliability Engineer' },
+  { github: 'carol-eng', jira: 'carol.wilson', level: 'Site Reliability Engineer' },
+  { github: 'eve-cloud',  jira: 'eve.taylor',   level: 'Senior Software Engineer' },
+  { github: 'dave-hcp',  jira: 'dave.brown',   level: 'Associate Site Reliability Engineer' },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -75,11 +75,11 @@ function issue({
 
 // ── PR metrics (pre-computed, mirrors what fetchPRMetrics returns) ────────────
 export const DEMO_PR_METRICS = {
-  'alice-dev': { prsOpened:18, prsMerged:16, prsReviewed:22, prsChurned:2, avgCycleTimeDays:2.1, churnPct:11, reviewComments:48 },
-  'bob-codes': { prsOpened:13, prsMerged:12, prsReviewed:15, prsChurned:1, avgCycleTimeDays:3.4, churnPct: 8, reviewComments:31 },
-  'carol-eng': { prsOpened: 9, prsMerged: 7, prsReviewed: 9, prsChurned:2, avgCycleTimeDays:4.8, churnPct:22, reviewComments:18 },
-  'eve-cloud':  { prsOpened: 6, prsMerged: 5, prsReviewed: 6, prsChurned:2, avgCycleTimeDays:6.2, churnPct:33, reviewComments:11 },
-  'dave-hcp':  { prsOpened: 3, prsMerged: 1, prsReviewed: 2, prsChurned:2, avgCycleTimeDays:14.0, churnPct:67, reviewComments: 3 },
+  'alice-dev': { prsOpened:18, prsMerged:16, prsClosedUnmerged:1, prsReviewed:22, prsChurned:2, avgCycleTimeDays:2.1, churnPct:11, reviewComments:48 },
+  'bob-codes': { prsOpened:13, prsMerged:12, prsClosedUnmerged:0, prsReviewed:15, prsChurned:1, avgCycleTimeDays:3.4, churnPct: 8, reviewComments:31 },
+  'carol-eng': { prsOpened: 9, prsMerged: 7, prsClosedUnmerged:1, prsReviewed: 9, prsChurned:2, avgCycleTimeDays:4.8, churnPct:22, reviewComments:18 },
+  'eve-cloud':  { prsOpened: 6, prsMerged: 5, prsClosedUnmerged:0, prsReviewed: 6, prsChurned:2, avgCycleTimeDays:6.2, churnPct:33, reviewComments:11 },
+  'dave-hcp':  { prsOpened: 3, prsMerged: 1, prsClosedUnmerged:1, prsReviewed: 2, prsChurned:2, avgCycleTimeDays:14.0, churnPct:67, reviewComments: 3 },
 };
 
 export const DEMO_JIRA_ISSUES = [

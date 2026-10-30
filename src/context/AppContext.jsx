@@ -1,11 +1,11 @@
 import { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import { format, parseISO, subDays } from 'date-fns';
-import { fetchContributors, fetchPRMetrics, fetchMultiRepoContributors, fetchMultiRepoPRMetrics } from '../github';
+import { fetchMultiRepoContributors, fetchMultiRepoPRMetrics } from '../github';
 import {
-  fetchJiraIssues, fetchRemoteLinksForIssues, normaliseIssue, resolveJiraUser,
+  fetchJiraIssues, fetchRemoteLinksForIssues, normaliseIssue, resolveJiraUser, testJiraConnection,
 } from '../jira';
 import {
-  testGitLabConnection, fetchGitLabMRMetrics, fetchMultiProjectMRMetrics,
+  testGitLabConnection, fetchMultiProjectMRMetrics,
 } from '../gitlab';
 import {
   DEMO_CONTRIBUTORS, DEMO_JIRA_ISSUES, DEMO_MAPPINGS, DEMO_PR_METRICS,
@@ -13,12 +13,14 @@ import {
 import {
   GH_CACHE_KEY, JIRA_CACHE_KEY, GL_CACHE_KEY,
   normAssociateKey, loadCache, saveCache,
-  stripPRListsForCache, stripMRListsForCache, clearAllCaches,
+  stripListsForCache, clearAllCaches,
 } from '../utils/cache';
-import { currentQuarterStart, looksLikeId, cleanDisplayName } from '../utils/helpers';
+import { currentQuarterStart, looksLikeId, cleanDisplayName, levelSeniority } from '../utils/helpers';
+import { usePersistentState } from '../components/shared';
 
 const AppContext = createContext(null);
 
+// eslint-disable-next-line react-refresh/only-export-components -- hook belongs with its provider
 export function useAppContext() {
   const ctx = useContext(AppContext);
   if (!ctx) throw new Error('useAppContext must be used within AppProvider');
@@ -33,7 +35,7 @@ export function AppProvider({ children }) {
 
   const switchTab = useCallback(async (t) => {
     setTab(t);
-    if (t === 'jira' || t === 'gitlab' || t === 'performance' || t === 'settings') {
+    if (!['home', 'github'].includes(t)) {
       try {
         const res = await fetch('/api/health', { signal: AbortSignal.timeout(4000) });
         if (res.ok) {
@@ -50,9 +52,9 @@ export function AppProvider({ children }) {
   }, []);
 
   // ── Shared config ──
-  const [token, setToken] = useState(() => localStorage.getItem('gh_token') || '');
-  const [ghRepo, setGhRepo] = useState(() => localStorage.getItem('gh_repo') || '');
-  const [associates, setAssociates] = useState(() => localStorage.getItem('gh_associates') || '');
+  const [token, setToken] = usePersistentState('gh_token', '', { storage: 'session' });
+  const [ghRepo, setGhRepo] = usePersistentState('gh_repo', '');
+  const [associates, setAssociates] = usePersistentState('gh_associates', '');
   const [sinceDate, setSinceDate] = useState(() => currentQuarterStart());
   const [untilDate, setUntilDate] = useState(() => new Date());
   const since = useMemo(() => format(sinceDate, 'yyyy-MM-dd'), [sinceDate]);
@@ -61,20 +63,17 @@ export function AppProvider({ children }) {
   const [activeAssociate, setActiveAssociate] = useState(null);
 
   // ── Jira config ──
-  const [jiraBase, setJiraBase] = useState(() => localStorage.getItem('jira_base') || '');
-  const [jiraEmail, setJiraEmail] = useState(() => localStorage.getItem('jira_email') || '');
-  const [jiraApiKey, setJiraApiKey] = useState(() => localStorage.getItem('jira_key') || '');
+  const [jiraBase, setJiraBase] = usePersistentState('jira_base', '');
+  const [jiraEmail, setJiraEmail] = usePersistentState('jira_email', '');
+  const [jiraApiKey, setJiraApiKey] = usePersistentState('jira_key', '', { storage: 'session' });
 
   // ── Mapping ──
-  const [mappings, setMappings] = useState(() => {
-    try {
-      const stored = localStorage.getItem('user_mapping');
-      const parsed = stored ? JSON.parse(stored) : null;
-      return Array.isArray(parsed) && parsed.length ? parsed : [];
-    } catch { return []; }
+  const [mappings, setMappings] = usePersistentState('user_mapping', [], {
+    json: true,
+    validate: Array.isArray,
   });
 
-  const addMappingRow = () => setMappings(m => [...m, { github: '', gitlab: '', jira: '', jiraDisplay: '' }]);
+  const addMappingRow = () => setMappings(m => [...m, { github: '', gitlab: '', jira: '', jiraDisplay: '', level: '' }]);
   const removeMappingRow = (i) => setMappings(m => m.filter((_, idx) => idx !== i));
   const updateMapping = (i, field, val) =>
     setMappings(m => m.map((row, idx) => {
@@ -109,9 +108,9 @@ export function AppProvider({ children }) {
   const [cacheClearMsg, setCacheClearMsg] = useState(null);
 
   // ── GitLab config ──
-  const [glUrl, setGlUrl] = useState(() => localStorage.getItem('gl_url') || '');
-  const [glToken, setGlToken] = useState(() => localStorage.getItem('gl_token') || '');
-  const [glProject, setGlProject] = useState(() => localStorage.getItem('gl_project') || '');
+  const [glUrl, setGlUrl] = usePersistentState('gl_url', '');
+  const [glToken, setGlToken] = usePersistentState('gl_token', '', { storage: 'session' });
+  const [glProject, setGlProject] = usePersistentState('gl_project', '');
 
   // ── GitLab state ──
   const [glMRMetrics, setGlMRMetrics] = useState({});
@@ -132,16 +131,19 @@ export function AppProvider({ children }) {
   const [jiraCacheTs, setJiraCacheTs] = useState(null);
   const [jiraTestStatus, setJiraTestStatus] = useState(null);
   const [jiraTestMsg, setJiraTestMsg] = useState('');
-  const [spField, setSpField] = useState(() => localStorage.getItem('jira_sp_field') || '');
 
-  // ── Persist to localStorage ──
+  // ── Persistence and OAuth callback ──
   useEffect(() => {
+    // Credentials moved to sessionStorage; clear copies left by older builds.
+    for (const key of ['gh_token', 'jira_key', 'gl_token']) {
+      try { localStorage.removeItem(key); } catch { /* storage blocked */ }
+    }
+
     const hash = window.location.hash;
     if (hash.startsWith('#github_token=')) {
       const t = hash.slice('#github_token='.length);
       if (t) {
         setToken(t);
-        localStorage.setItem('gh_token', t);
         setGhOAuthSuccess(true);
         setTab('settings');
         setTimeout(() => setGhOAuthSuccess(false), 5000);
@@ -159,20 +161,8 @@ export function AppProvider({ children }) {
     }
   }, []);
 
-  useEffect(() => { localStorage.setItem('gh_token', token); }, [token]);
-  useEffect(() => { localStorage.setItem('gh_repo', ghRepo); }, [ghRepo]);
-  useEffect(() => { localStorage.setItem('gh_associates', associates); }, [associates]);
-  useEffect(() => { localStorage.setItem('jira_base', jiraBase); }, [jiraBase]);
-  useEffect(() => { localStorage.setItem('jira_email', jiraEmail); }, [jiraEmail]);
-  useEffect(() => { localStorage.setItem('jira_key', jiraApiKey); }, [jiraApiKey]);
-  useEffect(() => { localStorage.setItem('gl_url', glUrl); }, [glUrl]);
-  useEffect(() => { localStorage.setItem('gl_token', glToken); }, [glToken]);
-  useEffect(() => { localStorage.setItem('gl_project', glProject); }, [glProject]);
-  useEffect(() => { localStorage.setItem('jira_sp_field', spField); }, [spField]);
-
   const [mappingSaved, setMappingSaved] = useState(false);
   useEffect(() => {
-    localStorage.setItem('user_mapping', JSON.stringify(mappings));
     setMappingSaved(true);
     const t = setTimeout(() => setMappingSaved(false), 2000);
     return () => clearTimeout(t);
@@ -272,39 +262,29 @@ export function AppProvider({ children }) {
   const glProjectList = useMemo(() =>
     (glProject || '').split(',').map(p => p.trim()).filter(Boolean), [glProject]);
 
-  const ghRepoRows = useMemo(() => {
-    const list = (ghRepo || '').split(',').map(r => r.trim());
-    return list.length > 0 && list.some(Boolean) ? list : [''];
-  }, [ghRepo]);
-  const setGhRepoRow = useCallback((i, val) => {
-    const rows = [...ghRepoRows];
-    rows[i] = val;
-    setGhRepo(rows.join(', '));
-  }, [ghRepoRows]);
-  const addGhRepoRow = useCallback(() => {
-    setGhRepo(ghRepoRows.join(', ') + ', ');
-  }, [ghRepoRows]);
-  const removeGhRepoRow = useCallback((i) => {
-    const rows = ghRepoRows.filter((_, j) => j !== i);
-    setGhRepo(rows.length ? rows.join(', ') : '');
-  }, [ghRepoRows]);
+  // Editable rows for a comma-separated list state (repos, projects).
+  const useCsvRows = (value, setValue) => {
+    const rows = useMemo(() => {
+      const list = (value || '').split(',').map(r => r.trim());
+      return list.length > 0 && list.some(Boolean) ? list : [''];
+    }, [value]);
+    const setRow = useCallback((i, val) => {
+      const next = [...rows];
+      next[i] = val;
+      setValue(next.join(', '));
+    }, [rows, setValue]);
+    const addRow = useCallback(() => {
+      setValue(rows.join(', ') + ', ');
+    }, [rows, setValue]);
+    const removeRow = useCallback((i) => {
+      const next = rows.filter((_, j) => j !== i);
+      setValue(next.length ? next.join(', ') : '');
+    }, [rows, setValue]);
+    return { rows, setRow, addRow, removeRow };
+  };
 
-  const glProjectRows = useMemo(() => {
-    const list = (glProject || '').split(',').map(p => p.trim());
-    return list.length > 0 && list.some(Boolean) ? list : [''];
-  }, [glProject]);
-  const setGlProjectRow = useCallback((i, val) => {
-    const rows = [...glProjectRows];
-    rows[i] = val;
-    setGlProject(rows.join(', '));
-  }, [glProjectRows]);
-  const addGlProjectRow = useCallback(() => {
-    setGlProject(glProjectRows.join(', ') + ', ');
-  }, [glProjectRows]);
-  const removeGlProjectRow = useCallback((i) => {
-    const rows = glProjectRows.filter((_, j) => j !== i);
-    setGlProject(rows.length ? rows.join(', ') : '');
-  }, [glProjectRows]);
+  const { rows: ghRepoRows, setRow: setGhRepoRow, addRow: addGhRepoRow, removeRow: removeGhRepoRow } = useCsvRows(ghRepo, setGhRepo);
+  const { rows: glProjectRows, setRow: setGlProjectRow, addRow: addGlProjectRow, removeRow: removeGlProjectRow } = useCsvRows(glProject, setGlProject);
 
   const jiraUsernames = useMemo(() => {
     if (userMapping.length) return userMapping.map(m => m.jira).filter(Boolean);
@@ -321,26 +301,26 @@ export function AppProvider({ children }) {
     return associateList;
   }, [userMapping, associateList]);
 
-  const ghDisplayName = useCallback((ghLogin) => {
-    if (!ghLogin) return '';
-    const row = userMapping.find(m => m.github?.toLowerCase() === ghLogin.toLowerCase());
+  const displayNameFromMapping = useCallback((matcher) => {
+    const row = userMapping.find(matcher);
     const fromDisplay = cleanDisplayName(row?.jiraDisplay);
     if (fromDisplay) return fromDisplay;
     if (row?.jira && !looksLikeId(row.jira)) return row.jira;
-    return ghLogin;
+    return null;
   }, [userMapping]);
+
+  const ghDisplayName = useCallback((ghLogin) => {
+    if (!ghLogin) return '';
+    return displayNameFromMapping(m => m.github?.toLowerCase() === ghLogin.toLowerCase()) || ghLogin;
+  }, [displayNameFromMapping]);
 
   const glDisplayName = useCallback((glUsername) => {
     if (!glUsername) return '';
-    const row = userMapping.find(m =>
+    return displayNameFromMapping(m =>
       m.gitlab?.toLowerCase() === glUsername.toLowerCase() ||
       m.github?.toLowerCase() === glUsername.toLowerCase()
-    );
-    const fromDisplay = cleanDisplayName(row?.jiraDisplay);
-    if (fromDisplay) return fromDisplay;
-    if (row?.jira && !looksLikeId(row.jira)) return row.jira;
-    return glUsername;
-  }, [userMapping]);
+    ) || glUsername;
+  }, [displayNameFromMapping]);
 
   const ghToGl = useCallback((ghLogin) => {
     const row = userMapping.find(m => m.github?.toLowerCase() === ghLogin?.toLowerCase());
@@ -353,17 +333,6 @@ export function AppProvider({ children }) {
   };
 
   // ── Jira helpers ──
-  const issueMatchesAssignee = useCallback((issue, jiraValue) => {
-    if (!jiraValue) return false;
-    const v = jiraValue.toLowerCase();
-    const tokens = new Set([v]);
-    if (v.includes('@')) tokens.add(v.split('@')[0]);
-    const jiraName = issue.assigneeJira?.toLowerCase() ?? '';
-    const jiraEmailLocal = issue.assigneeEmail?.toLowerCase() ?? '';
-    const emailLocal = jiraEmailLocal.includes('@') ? jiraEmailLocal.split('@')[0] : jiraEmailLocal;
-    return tokens.has(jiraName) || tokens.has(jiraEmailLocal) || tokens.has(emailLocal);
-  }, []);
-
   const jiraByAssignee = useMemo(() => {
     const index = new Map();
     for (const issue of jiraIssues) {
@@ -400,30 +369,17 @@ export function AppProvider({ children }) {
   const handleFetchGitHub = useCallback(async () => {
     setGhError(null); setGhLoading(true); setGhFetched(false); setGhProgress(null);
     try {
-      const isMulti = ghRepoList.length > 1;
-      const mkProgress = (phase) => isMulti
-        ? (p) => setGhProgress({ ...p, phase })
-        : undefined;
-
-      const contribs = await (
-        isMulti ? fetchMultiRepoContributors(token, ghRepoList, { onProgress: mkProgress('contributors') })
-                : fetchContributors(token, ghRepoList[0])
-      );
-
-      if (isMulti) {
-        setGhProgress({ completed: 0, total: ghRepoList.length, phase: 'PR metrics' });
-      }
-
-      const prMeta = await (
-        isMulti ? fetchMultiRepoPRMetrics(token, ghRepoList, associateList, since, until, { onProgress: mkProgress('PR metrics') })
-                : fetchPRMetrics(token, ghRepoList[0], associateList, since, until)
-      ).catch(() => ({}));
+      // The multi-repo fetchers handle a single repo too.
+      const mkProgress = (phase) => (p) => setGhProgress({ ...p, phase });
+      const contribs = await fetchMultiRepoContributors(token, ghRepoList, { onProgress: mkProgress('contributors') });
+      setGhProgress({ completed: 0, total: ghRepoList.length, phase: 'PR metrics' });
+      const prMeta = await fetchMultiRepoPRMetrics(token, ghRepoList, associateList, since, until, { onProgress: mkProgress('PR metrics') })
+        .catch(() => ({}));
       const relevantLogins = new Set(associateList.map(a => a.toLowerCase()));
-      setContributors(
-        associateList.length > 0
-          ? contribs.filter(c => relevantLogins.has(c.login.toLowerCase()))
-          : contribs.slice(0, 20)
-      );
+      const filteredContribs = associateList.length > 0
+        ? contribs.filter(c => relevantLogins.has(c.login.toLowerCase()))
+        : contribs.slice(0, 20);
+      setContributors(filteredContribs);
 
       const loginMap = new Map();
       for (const assoc of associateList) {
@@ -447,9 +403,7 @@ export function AppProvider({ children }) {
       if (needsRefetch.length > 0 && !prMeta._rateLimited) {
         const resolvedLogins = needsRefetch.map(r => r.resolved);
         try {
-          const retried = isMulti
-            ? await fetchMultiRepoPRMetrics(token, ghRepoList, resolvedLogins, since, until)
-            : await fetchPRMetrics(token, ghRepoList[0], resolvedLogins, since, until);
+          const retried = await fetchMultiRepoPRMetrics(token, ghRepoList, resolvedLogins, since, until);
           for (const { original, resolved } of needsRefetch) {
             if (retried[resolved] || retried[resolved.toLowerCase()]) {
               mergedPr[original] = retried[resolved] || retried[resolved.toLowerCase()];
@@ -469,9 +423,6 @@ export function AppProvider({ children }) {
       }
       setPrMetrics(normalizedPr);
 
-      const filteredContribs = associateList.length > 0
-        ? contribs.filter(c => relevantLogins.has(c.login.toLowerCase()))
-        : contribs.slice(0, 20);
       const cachePayload = {
         key: `${ghRepo}|${normAssociateKey(associates)}`,
         ts: Date.now(), since, until,
@@ -479,14 +430,14 @@ export function AppProvider({ children }) {
       };
       saveCache(GH_CACHE_KEY,
         { ...cachePayload, prMetrics: normalizedPr },
-        { ...cachePayload, prMetrics: stripPRListsForCache(normalizedPr) },
+        { ...cachePayload, prMetrics: stripListsForCache(normalizedPr, ['authoredPRs', 'reviewedPRs']) },
       );
       setGhCacheTs(null);
 
       if (mergedPr._rateLimited) {
-        setPrFetchNote('⚠ GitHub search rate limit reached — PR data may be incomplete. Connect via OAuth or wait a minute and re-fetch.');
+        setPrFetchNote('⚠ GitHub rate limit reached — PR data may be incomplete. Wait a minute and re-fetch.');
       } else if (!token) {
-        setPrFetchNote('ℹ No GitHub token — unauthenticated requests have a very low rate limit (10/min). Connect GitHub for full PR data.');
+        setPrFetchNote('ℹ No GitHub token — PR metrics need a GitHub connection. Connect GitHub in Settings to load them.');
       } else {
         setPrFetchNote('');
       }
@@ -499,26 +450,9 @@ export function AppProvider({ children }) {
   const handleTestJira = useCallback(async () => {
     setJiraTestStatus(null); setJiraTestMsg(''); setJiraError(null);
     try {
-      const headers = { 'X-Jira-Url': jiraBase, 'X-Jira-Token': jiraApiKey };
-      if (jiraEmail) headers['X-Jira-Email'] = jiraEmail;
-      let res;
-      try {
-        res = await fetch('/api/test', { headers, signal: AbortSignal.timeout(10000) });
-      } catch {
-        setJiraTestStatus('error');
-        setJiraTestMsg('Cannot reach the Python backend. Start it with: cd backend && uvicorn main:app --reload --port 8000');
-        return;
-      }
-      const text = await res.text().catch(() => '');
-      let data = {};
-      try { data = JSON.parse(text); } catch {}
-      if (!res.ok) {
-        setJiraTestStatus('error');
-        setJiraTestMsg(data.detail || text.slice(0, 300) || `HTTP ${res.status}`);
-      } else {
-        setJiraTestStatus('ok');
-        setJiraTestMsg(`Connected as: ${data.user}`);
-      }
+      const data = await testJiraConnection(jiraBase, jiraApiKey, jiraEmail);
+      setJiraTestStatus('ok');
+      setJiraTestMsg(`Connected as: ${data.user}`);
     } catch (e) {
       setJiraTestStatus('error');
       setJiraTestMsg(e.message);
@@ -529,8 +463,8 @@ export function AppProvider({ children }) {
   const handleFetchJira = useCallback(async () => {
     setJiraError(null); setJiraLoading(true); setJiraFetched(false);
     try {
-      const raw = await fetchJiraIssues(jiraBase, jiraApiKey, jiraEmail, jiraUsernames, since, until, spField);
-      const issues = raw.map(i => normaliseIssue(i, spField));
+      const raw = await fetchJiraIssues(jiraBase, jiraApiKey, jiraEmail, jiraUsernames, since, until);
+      const issues = raw.map(i => normaliseIssue(i));
       setJiraIssues(issues);
       const keys = issues.map(i => i.key);
       const jiraCacheData = (links) => ({
@@ -550,7 +484,7 @@ export function AppProvider({ children }) {
       setJiraFetched(true);
     } catch (e) { setJiraError(e.message); }
     finally { setJiraLoading(false); }
-  }, [jiraBase, jiraApiKey, jiraEmail, jiraUsernames, since, until, spField]);
+  }, [jiraBase, jiraApiKey, jiraEmail, jiraUsernames, since, until]);
 
   // ── GitLab test ──
   const handleTestGitLab = useCallback(async () => {
@@ -569,14 +503,8 @@ export function AppProvider({ children }) {
   const handleFetchGitLab = useCallback(async () => {
     setGlError(null); setGlLoading(true); setGlFetched(false); setGlProgress(null);
     try {
-      const isMulti = glProjectList.length > 1;
-      const mkProgress = (phase) => isMulti
-        ? (p) => setGlProgress({ ...p, phase })
-        : undefined;
-      const mrMeta = await (
-        isMulti ? fetchMultiProjectMRMetrics(glUrl, glToken, glProjectList, glUsernames, since, until, { onProgress: mkProgress('merge requests') })
-                : fetchGitLabMRMetrics(glUrl, glToken, glProjectList[0], glUsernames, since, until)
-      ).catch(() => ({}));
+      const mrMeta = await fetchMultiProjectMRMetrics(glUrl, glToken, glProjectList, glUsernames, since, until,
+        { onProgress: (p) => setGlProgress({ ...p, phase: 'merge requests' }) }).catch(() => ({}));
       setGlMRMetrics(mrMeta);
       const glCachePayload = {
         key: `${glUrl}|${glProject}|${normAssociateKey(associates)}`,
@@ -584,7 +512,7 @@ export function AppProvider({ children }) {
       };
       saveCache(GL_CACHE_KEY,
         { ...glCachePayload, mrMetrics: mrMeta },
-        { ...glCachePayload, mrMetrics: stripMRListsForCache(mrMeta) },
+        { ...glCachePayload, mrMetrics: stripListsForCache(mrMeta, ['authoredMRs', 'reviewedMRs']) },
       );
       setGlCacheTs(null);
       setGlFetched(true);
@@ -633,29 +561,28 @@ export function AppProvider({ children }) {
   const perfData = useMemo(() => {
     const people = userMapping.length > 0 ? userMapping : associateList.map(g => ({ github: g, jira: g }));
 
-    return people.map(({ github, jira, gitlab, jiraDisplay }) => {
+    return people.map(({ github, jira, gitlab, jiraDisplay, level }) => {
       const ghPr = prMetrics[github?.toLowerCase()] ?? {};
       const glName = gitlab || github;
       const myGlMR = glMRMetrics[glName] || {};
 
       const myIssues = getIssuesForAssignee(jira);
-      const doneIssues = myIssues.filter(i => i.statusCategory?.toLowerCase().includes('done'));
-      const openIssues = myIssues.filter(i => !i.statusCategory?.toLowerCase().includes('done'));
+      const isDone = (i) => {
+        const cat = i.statusCategory?.toLowerCase() || '';
+        const st = i.status?.toLowerCase() || '';
+        return cat.includes('done') || st === 'closed' || st === 'resolved';
+      };
+      const doneIssues = myIssues.filter(isDone);
+      const openIssues = myIssues.filter(i => !isDone(i));
 
       const avgCycleTime = (() => {
         const valid = doneIssues.map(i => i.cycleTime).filter(v => v !== null);
         return valid.length ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
       })();
 
-      const avgDaysInProgress = (() => {
-        const valid = openIssues.map(i => i.daysInProgress).filter(v => v !== null);
-        return valid.length ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
-      })();
-
       const totalSpillovers = myIssues.reduce((s, i) => s + i.spillovers, 0);
       const totalSP = doneIssues.reduce((s, i) => s + (i.storyPoints || 0), 0);
 
-      const totalComments = myIssues.reduce((s, i) => s + (i.commentCount ?? 0), 0);
       const jiraTokens = new Set([jira?.toLowerCase()].filter(Boolean));
       if (jira?.includes('@')) jiraTokens.add(jira.split('@')[0].toLowerCase());
       const commentsGiven = myIssues.reduce((s, i) =>
@@ -668,14 +595,16 @@ export function AppProvider({ children }) {
       const statusChanges = myIssues.reduce((s, i) => s + (i.statusTransitions?.length ?? 0), 0);
 
       return {
-        github, jira,
+        github, jira, level: level || '',
         displayName: cleanDisplayName(jiraDisplay) || (!looksLikeId(jira) ? jira : null) || github,
         ghPRsOpened: ghPr.prsOpened ?? 0,
         ghPRsMerged: ghPr.prsMerged ?? 0,
+        ghPRsClosedUnmerged: ghPr.prsClosedUnmerged ?? 0,
         ghPRsReviewed: ghPr.prsReviewed ?? 0,
         ghAvgCycleTime: ghPr.avgCycleTimeDays ?? null,
         glMRsOpened: myGlMR.mrsOpened ?? 0,
         glMRsMerged: myGlMR.mrsMerged ?? 0,
+        glMRsClosedUnmerged: myGlMR.mrsClosedUnmerged ?? 0,
         glMRsReviewed: myGlMR.mrsReviewed ?? 0,
         glAvgCycleTime: myGlMR.avgCycleTimeDays ?? null,
         glAvgLinesChanged: myGlMR.avgLinesChanged ?? null,
@@ -684,25 +613,27 @@ export function AppProvider({ children }) {
         issuesDone: doneIssues.length,
         issuesOpen: openIssues.length,
         avgCycleTime,
-        avgDaysInProgress,
         totalSpillovers,
         totalSP,
-        totalComments,
         commentsGiven,
         statusChanges,
       };
-    }).filter(p => p.ghPRsOpened > 0 || p.ghPRsMerged > 0 || p.ghPRsReviewed > 0 || p.glMRsOpened > 0 || p.glMRsMerged > 0 || p.glMRsReviewed > 0 || p.issuesTotal > 0);
+    }).filter(p => p.ghPRsOpened > 0 || p.ghPRsMerged > 0 || p.ghPRsReviewed > 0 || p.glMRsOpened > 0 || p.glMRsMerged > 0 || p.glMRsReviewed > 0 || p.issuesTotal > 0)
+      .sort((a, b) => levelSeniority(a.level) - levelSeniority(b.level));
   }, [userMapping, associateList, prMetrics, glMRMetrics, getIssuesForAssignee]);
 
   const workSummary = useMemo(() => {
     const people = userMapping.length > 0 ? userMapping : associateList.map(g => ({ github: g, jira: g }));
 
-    return people.map(({ github, jira, gitlab, jiraDisplay }) => {
+    return people.map(({ github, jira, gitlab, jiraDisplay, level }) => {
       const myIssues = getIssuesForAssignee(jira);
       const jiraItems = myIssues.map(i => ({
         key: i.key, url: i.url, title: i.summary, status: i.status,
-        isDone: i.statusCategory?.toLowerCase().includes('done'),
+        isDone: i.statusCategory?.toLowerCase().includes('done') || i.status?.toLowerCase() === 'closed' || i.status?.toLowerCase() === 'resolved',
         type: 'jira', issueType: i.issueType, priority: i.priority,
+        resolutionDate: i.resolutionDate || null,
+        description: i.description || '',
+        comments: (i.comments ?? []).filter(c => c.body).slice(0, 5),
       }));
 
       const ghPr = prMetrics[github?.toLowerCase()];
@@ -717,7 +648,7 @@ export function AppProvider({ children }) {
       }));
 
       const displayName = cleanDisplayName(jiraDisplay) || github;
-      return { github, jira, displayName, jiraItems, prItems, mrItems };
+      return { github, jira, displayName, level: level || '', jiraItems, prItems, mrItems };
     }).filter(p => p.jiraItems.length > 0 || p.prItems.length > 0 || p.mrItems.length > 0);
   }, [userMapping, associateList, prMetrics, glMRMetrics, getIssuesForAssignee]);
 
@@ -747,25 +678,25 @@ export function AppProvider({ children }) {
   const value = {
     tab, setTab, switchTab, backendUp, oauthAvailable,
     sinceDate, setSinceDate, untilDate, setUntilDate, since, until, applyQuickRange,
-    token, setToken, ghRepo, setGhRepo, associates, setAssociates,
+    token, setToken, associates, setAssociates,
     ghRepoList, ghRepoRows, setGhRepoRow, addGhRepoRow, removeGhRepoRow,
-    glUrl, setGlUrl, glToken, setGlToken, glProject, setGlProject,
+    glUrl, setGlUrl, glToken, setGlToken,
     glProjectList, glProjectRows, setGlProjectRow, addGlProjectRow, removeGlProjectRow,
-    jiraBase, setJiraBase, jiraEmail, setJiraEmail, jiraApiKey, setJiraApiKey, spField, setSpField,
+    jiraBase, setJiraBase, jiraEmail, setJiraEmail, jiraApiKey, setJiraApiKey,
     mappings, setMappings, addMappingRow, removeMappingRow, updateMapping,
     userMapping, lookupState, setLookupState, lookupJiraUser, mappingSaved,
     activeAssociate, setActiveAssociate,
-    associateList, associateOptions, jiraUsernames, glUsernames,
+    associateList, associateOptions,
     ghDisplayName, glDisplayName, ghToGl,
-    contributors, setContributors, prMetrics, setPrMetrics, prFetchNote, setPrFetchNote,
-    demoMode, setDemoMode,
-    ghLoading, ghProgress, ghError, setGhError, ghFetched, ghCacheTs, setGhCacheTs,
+    contributors, prMetrics, prFetchNote,
+    demoMode,
+    ghLoading, ghProgress, ghError, ghFetched, ghCacheTs, setGhCacheTs,
     ghOAuthSuccess, cacheClearMsg, setCacheClearMsg,
-    glMRMetrics, setGlMRMetrics, glLoading, glProgress, glError, glFetched, glCacheTs, setGlCacheTs,
-    glTestStatus, setGlTestStatus, glTestMsg, setGlTestMsg,
+    glMRMetrics, glLoading, glProgress, glError, glFetched, glCacheTs, setGlCacheTs,
+    glTestStatus, glTestMsg,
     jiraIssues, remoteLinks, jiraLoading, jiraError, jiraFetched, jiraCacheTs, setJiraCacheTs,
-    jiraTestStatus, setJiraTestStatus, jiraTestMsg, setJiraTestMsg,
-    issueMatchesAssignee, jiraByAssignee, getIssuesForAssignee,
+    jiraTestStatus, jiraTestMsg,
+    getIssuesForAssignee,
     handleFetchGitHub, handleFetchJira, handleFetchGitLab, handleFetchAll, fetchAllLoading,
     handleTestJira, handleTestGitLab,
     handleExportConfig, handleImportConfig,

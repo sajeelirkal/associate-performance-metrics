@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, RadarChart,
@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import { useAppContext } from '../../context/AppContext';
 import { ChartTooltip, InfoTip } from '../shared';
-import { COLORS, PR_CHURN_TIP, statusColor, priorityIcon } from '../../utils/helpers';
+import { COLORS, PR_CHURN_TIP, PR_CLOSED_UNMERGED_TIP, statusColor, priorityIcon, downloadCSV, levelSeniority } from '../../utils/helpers';
 
 export default function PerformanceTab() {
   const {
@@ -21,32 +21,55 @@ export default function PerformanceTab() {
   const togglePerson = (github) =>
     setCollapsedPersons(s => ({ ...s, [github]: !s[github] }));
 
-  const downloadWorkSummaryCSV = useCallback(() => {
-    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = [['Associate', 'Source', 'ID', 'Title', 'Status', 'Type', 'Priority', 'URL']];
-    const data = activeAssociate
+  const groupByLevel = useCallback((items) => {
+    const groups = new Map();
+    for (const item of items) {
+      const lvl = item.level || '';
+      if (!groups.has(lvl)) groups.set(lvl, []);
+      groups.get(lvl).push(item);
+    }
+    const result = [];
+    for (const [level, people] of groups) {
+      if (level) result.push({ level, people });
+    }
+    result.sort((a, b) => levelSeniority(a.level) - levelSeniority(b.level));
+    const unassigned = groups.get('');
+    if (unassigned) result.push({ level: 'Unassigned', people: unassigned });
+    return result;
+  }, []);
+
+  const filteredPerf = useMemo(() =>
+    activeAssociate
+      ? perfData.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase())
+      : perfData,
+    [perfData, activeAssociate]
+  );
+
+  const filteredWorkSummary = useMemo(() =>
+    activeAssociate
       ? workSummary.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase())
-      : workSummary;
-    for (const p of data) {
+      : workSummary,
+    [workSummary, activeAssociate]
+  );
+
+  const groupedPerfData = useMemo(() => groupByLevel(filteredPerf), [filteredPerf, groupByLevel]);
+  const groupedWorkSummary = useMemo(() => groupByLevel(filteredWorkSummary), [filteredWorkSummary, groupByLevel]);
+
+  const downloadWorkSummaryCSV = useCallback(() => {
+    const rows = [['Associate', 'Level', 'Source', 'ID', 'Title', 'Status', 'Type', 'Priority', 'URL']];
+    for (const p of filteredWorkSummary) {
       for (const i of p.jiraItems) {
-        rows.push([esc(p.displayName), 'Jira', esc(i.key), esc(i.title), esc(i.status), esc(i.issueType), esc(i.priority), esc(i.url)]);
+        rows.push([p.displayName, p.level, 'Jira', i.key, i.title, i.status, i.issueType, i.priority, i.url]);
       }
       for (const pr of p.prItems) {
-        rows.push([esc(p.displayName), 'GitHub PR', esc(pr.id), esc(pr.title), esc(pr.state), '', '', esc(pr.url)]);
+        rows.push([p.displayName, p.level, 'GitHub PR', pr.id, pr.title, pr.state, '', '', pr.url]);
       }
       for (const mr of p.mrItems) {
-        rows.push([esc(p.displayName), 'GitLab MR', esc(mr.id), esc(mr.title), esc(mr.state), '', '', esc(mr.url)]);
+        rows.push([p.displayName, p.level, 'GitLab MR', mr.id, mr.title, mr.state, '', '', mr.url]);
       }
     }
-    const csv = rows.map(r => r.join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `work-summary${activeAssociate ? `-${activeAssociate}` : ''}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [workSummary, activeAssociate]);
+    downloadCSV(`work-summary${activeAssociate ? `-${activeAssociate}` : ''}.csv`, rows);
+  }, [filteredWorkSummary, activeAssociate]);
 
   return (
     <>
@@ -112,50 +135,71 @@ export default function PerformanceTab() {
                 ))}
               </div>
             </div>
-            {activeAssociate && (
-              <div className="badge" style={{ alignSelf:'center', background:'rgba(88,166,255,0.1)', color:'var(--accent)', padding:'4px 12px', fontSize:12 }}>
-                1:1 view — {ghDisplayName(activeAssociate)}
-              </div>
-            )}
+            <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+              {activeAssociate && (
+                <div className="badge" style={{ background:'rgba(88,166,255,0.1)', color:'var(--accent)', padding:'4px 12px', fontSize:12 }}>
+                  1:1 view — {ghDisplayName(activeAssociate)}
+                </div>
+              )}
+            </div>
           </div>
 
-          <div style={{ display:'flex', flexWrap:'wrap', gap:12, marginBottom:24 }}>
-            {perfData.filter(p => !activeAssociate || p.github?.toLowerCase() === activeAssociate.toLowerCase()).map((p, i) => {
-              const pr = prMetrics[p.github?.toLowerCase()];
-              return (
-              <div key={p.github} className={`perf-card ${activeAssociate?.toLowerCase() === p.github?.toLowerCase() ? 'perf-card-focused' : ''}`} style={{ borderColor: COLORS[perfData.indexOf(p) % COLORS.length] }}>
-                <div className="perf-name" style={{ color: COLORS[i % COLORS.length] }}>{p.displayName}</div>
-                {p.displayName !== p.github && <div className="perf-sub">{p.github} (GitHub)</div>}
-                <div className="perf-metrics">
-                  {pr && <>
-                    <div className="perf-metric"><span>GH PRs Merged</span><strong style={{ color:'var(--accent)' }}>{pr.prsMerged ?? '—'}</strong></div>
-                    <div className="perf-metric"><span>GH Reviews Given</span><strong style={{ color:'var(--accent4)' }}>{pr.prsReviewed ?? '—'}</strong></div>
-                    <div className="perf-metric"><span>GH Review Comments</span><strong style={{ color:'#d2a8ff' }}>{pr.reviewComments ?? '—'}</strong></div>
-                    <div className="perf-metric"><span>GH PR Cycle Time</span><strong>{pr.avgCycleTimeDays != null ? `${pr.avgCycleTimeDays}d` : '—'}</strong></div>
-                    <div className="perf-metric"><span>Avg Lines/PR</span><strong style={{ color:'#f0883e' }}>{pr.avgLinesChanged != null ? pr.avgLinesChanged.toLocaleString() : '—'}</strong></div>
-                    <div className="perf-metric"><span>Avg Files/PR</span><strong style={{ color:'#d29922' }}>{pr.avgFilesChanged != null ? pr.avgFilesChanged : '—'}</strong></div>
-                    <div className="perf-metric"><span>PR Churn <InfoTip text={PR_CHURN_TIP} /></span><strong style={{ color: (pr.churnPct??0)>60?'var(--danger)':'inherit' }}>{pr.churnPct != null ? `${pr.churnPct}%` : '—'}</strong></div>
-                  </>}
-                  {p.glMRsOpened > 0 && <>
-                    {pr && <div className="perf-metric" style={{ borderTop:'1px solid var(--border)', gridColumn:'1/-1', paddingTop:4, marginTop:2 }}/>}
-                    <div className="perf-metric"><span>GL MRs Merged</span><strong style={{ color:'#FC6D26' }}>{p.glMRsMerged}</strong></div>
-                    <div className="perf-metric"><span>GL Reviews Given</span><strong style={{ color:'#FC6D26' }}>{p.glMRsReviewed}</strong></div>
-                    <div className="perf-metric"><span>GL MR Cycle Time</span><strong>{p.glAvgCycleTime != null ? `${p.glAvgCycleTime}d` : '—'}</strong></div>
-                    <div className="perf-metric"><span>GL Avg Lines/MR</span><strong style={{ color:'#f0883e' }}>{p.glAvgLinesChanged != null ? p.glAvgLinesChanged.toLocaleString() : '—'}</strong></div>
-                    <div className="perf-metric"><span>GL Avg Files/MR</span><strong style={{ color:'#d29922' }}>{p.glAvgFilesChanged != null ? p.glAvgFilesChanged : '—'}</strong></div>
-                  </>}
-                  <div className="perf-metric" style={{ borderTop:'1px solid var(--border)', gridColumn:'1/-1', paddingTop:4, marginTop:2 }}/>
-                  <div className="perf-metric"><span>Issues Done</span><strong style={{ color:'var(--accent2)' }}>{p.issuesDone}</strong></div>
-                  <div className="perf-metric"><span>Issues Open</span><strong style={{ color:'var(--accent5)' }}>{p.issuesOpen}</strong></div>
-                  <div className="perf-metric"><span>Avg Cycle</span><strong>{p.avgCycleTime !== null ? `${p.avgCycleTime}d` : '—'}</strong></div>
-                  <div className="perf-metric"><span>Spillovers</span><strong style={{ color: p.totalSpillovers>0?'var(--danger)':'var(--accent2)' }}>{p.totalSpillovers}</strong></div>
-                  <div className="perf-metric"><span>Story Pts</span><strong style={{ color:'var(--accent4)' }}>{p.totalSP || '—'}</strong></div>
-                  <div className="perf-metric"><span>Jira Comments</span><strong style={{ color:'#d2a8ff' }}>{p.commentsGiven ?? '—'}</strong></div>
-                  <div className="perf-metric"><span>Status Changes</span><strong>{p.statusChanges ?? '—'}</strong></div>
+          <div style={{ display:'flex', flexDirection:'column', gap:20, marginBottom:24 }}>
+            {groupedPerfData.map(group => (
+              <div key={group.level}>
+                {groupedPerfData.length > 1 && (
+                  <div style={{
+                    display:'flex', alignItems:'center', gap:10, marginBottom:10,
+                    padding:'6px 12px', background:'rgba(88,166,255,0.06)', borderRadius:6,
+                    borderLeft:'3px solid var(--accent4)',
+                  }}>
+                    <span style={{ fontSize:13, fontWeight:600, color:'var(--accent4)' }}>{group.level}</span>
+                    <span style={{ fontSize:11, color:'var(--text-muted)' }}>{group.people.length} associate{group.people.length !== 1 ? 's' : ''}</span>
+                  </div>
+                )}
+                <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
+                  {group.people.map(p => {
+                    const pr = prMetrics[p.github?.toLowerCase()];
+                    const globalIdx = perfData.indexOf(p);
+                    return (
+                    <div key={p.github} className={`perf-card ${activeAssociate?.toLowerCase() === p.github?.toLowerCase() ? 'perf-card-focused' : ''}`} style={{ borderColor: COLORS[globalIdx % COLORS.length], position:'relative' }}>
+                      <div className="perf-name" style={{ color: COLORS[globalIdx % COLORS.length] }}>{p.displayName}</div>
+                      {p.displayName !== p.github && <div className="perf-sub">{p.github} (GitHub)</div>}
+                      <div className="perf-metrics">
+                        {pr && <>
+                          <div className="perf-metric"><span>GH PRs Merged</span><strong style={{ color:'var(--accent)' }}>{pr.prsMerged ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH PRs Closed Unmerged <InfoTip text={PR_CLOSED_UNMERGED_TIP} /></span><strong style={{ color:'var(--danger)' }}>{pr.prsClosedUnmerged ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH Reviews Given</span><strong style={{ color:'var(--accent4)' }}>{pr.prsReviewed ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH Review Comments</span><strong style={{ color:'#d2a8ff' }}>{pr.reviewComments ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GH PR Cycle Time</span><strong>{pr.avgCycleTimeDays != null ? `${pr.avgCycleTimeDays}d` : '—'}</strong></div>
+                          <div className="perf-metric"><span>Avg Lines/PR</span><strong style={{ color:'#f0883e' }}>{pr.avgLinesChanged != null ? pr.avgLinesChanged.toLocaleString() : '—'}</strong></div>
+                          <div className="perf-metric"><span>Avg Files/PR</span><strong style={{ color:'#d29922' }}>{pr.avgFilesChanged != null ? pr.avgFilesChanged : '—'}</strong></div>
+                          <div className="perf-metric"><span>PR Churn <InfoTip text={PR_CHURN_TIP} /></span><strong style={{ color: (pr.churnPct??0)>60?'var(--danger)':'inherit' }}>{pr.churnPct != null ? `${pr.churnPct}%` : '—'}</strong></div>
+                        </>}
+                        {p.glMRsOpened > 0 && <>
+                          {pr && <div className="perf-metric" style={{ borderTop:'1px solid var(--border)', gridColumn:'1/-1', paddingTop:4, marginTop:2 }}/>}
+                          <div className="perf-metric"><span>GL MRs Merged</span><strong style={{ color:'#FC6D26' }}>{p.glMRsMerged}</strong></div>
+                          <div className="perf-metric"><span>GL MRs Closed Unmerged <InfoTip text={PR_CLOSED_UNMERGED_TIP} /></span><strong style={{ color:'var(--danger)' }}>{p.glMRsClosedUnmerged ?? '—'}</strong></div>
+                          <div className="perf-metric"><span>GL Reviews Given</span><strong style={{ color:'#FC6D26' }}>{p.glMRsReviewed}</strong></div>
+                          <div className="perf-metric"><span>GL MR Cycle Time</span><strong>{p.glAvgCycleTime != null ? `${p.glAvgCycleTime}d` : '—'}</strong></div>
+                          <div className="perf-metric"><span>GL Avg Lines/MR</span><strong style={{ color:'#f0883e' }}>{p.glAvgLinesChanged != null ? p.glAvgLinesChanged.toLocaleString() : '—'}</strong></div>
+                          <div className="perf-metric"><span>GL Avg Files/MR</span><strong style={{ color:'#d29922' }}>{p.glAvgFilesChanged != null ? p.glAvgFilesChanged : '—'}</strong></div>
+                        </>}
+                        <div className="perf-metric" style={{ borderTop:'1px solid var(--border)', gridColumn:'1/-1', paddingTop:4, marginTop:2 }}/>
+                        <div className="perf-metric"><span>Issues Done</span><strong style={{ color:'var(--accent2)' }}>{p.issuesDone}</strong></div>
+                        <div className="perf-metric"><span>Issues Open</span><strong style={{ color:'var(--accent5)' }}>{p.issuesOpen}</strong></div>
+                        <div className="perf-metric"><span>Avg Cycle</span><strong>{p.avgCycleTime !== null ? `${p.avgCycleTime}d` : '—'}</strong></div>
+                        <div className="perf-metric"><span>Spillovers</span><strong style={{ color: p.totalSpillovers>0?'var(--danger)':'var(--accent2)' }}>{p.totalSpillovers}</strong></div>
+                        <div className="perf-metric"><span>Story Pts</span><strong style={{ color:'var(--accent4)' }}>{p.totalSP || '—'}</strong></div>
+                        <div className="perf-metric"><span>Jira Comments</span><strong style={{ color:'#d2a8ff' }}>{p.commentsGiven ?? '—'}</strong></div>
+                        <div className="perf-metric"><span>Status Changes</span><strong>{p.statusChanges ?? '—'}</strong></div>
+                      </div>
+                    </div>
+                    );
+                  })}
                 </div>
               </div>
-              );
-            })}
+            ))}
           </div>
 
           {(() => {
@@ -286,6 +330,7 @@ export default function PerformanceTab() {
                   <tr>
                     <th>Associate</th>
                     <th>GH PRs Merged</th>
+                    <th>Closed Unmerged <InfoTip text={PR_CLOSED_UNMERGED_TIP} /></th>
                     <th>GL MRs Merged</th>
                     <th>Reviews</th>
                     <th>GH Avg Lines/PR</th>
@@ -301,39 +346,60 @@ export default function PerformanceTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(activeAssociate ? perfData.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase()) : perfData).map((p, i) => {
-                    const pr = prMetrics[p.github?.toLowerCase()];
-                    return (
-                    <tr key={p.github}>
-                      <td>
-                        <div style={{ display:'flex', flexDirection:'column' }}>
-                          <strong style={{ color: COLORS[i%COLORS.length] }}>{p.displayName}</strong>
-                          {p.displayName !== p.github && <span style={{ fontSize:11, color:'var(--text-muted)' }}>{p.github}</span>}
-                        </div>
-                      </td>
-                      <td style={{ color:'var(--accent)', fontWeight:600 }}>{pr?.prsMerged ?? '—'}</td>
-                      <td style={{ color:'#FC6D26', fontWeight:600 }}>{p.glMRsMerged ?? '—'}</td>
-                      <td style={{ color:'var(--accent4)', fontWeight:600 }}>{(pr?.prsReviewed ?? 0) + (p.glMRsReviewed ?? 0)}</td>
-                      <td style={{ color:'#f0883e', fontWeight:600 }}>{pr?.avgLinesChanged != null ? pr.avgLinesChanged.toLocaleString() : '—'}</td>
-                      <td style={{ color:'#f0883e', fontWeight:600 }}>{p.glAvgLinesChanged != null ? p.glAvgLinesChanged.toLocaleString() : '—'}</td>
-                      <td style={{ color:'#d29922', fontWeight:600 }}>{(() => { const gh = pr?.avgFilesChanged; const gl = p.glAvgFilesChanged; if (gh != null && gl != null) return `${gh} / ${gl}`; return gh ?? gl ?? '—'; })()}</td>
-                      <td>
-                        {pr?.churnPct != null
-                          ? <span style={{ color:(pr.churnPct>60)?'var(--danger)':'inherit', fontWeight:600 }}>{pr.churnPct}%</span>
-                          : '—'}
-                      </td>
-                      <td><strong style={{ color:'var(--accent2)' }}>{p.issuesDone}</strong></td>
-                      <td>{p.issuesOpen}</td>
-                      <td>{p.avgCycleTime !== null ? `${p.avgCycleTime}d` : '—'}</td>
-                      <td>
-                        <span style={{ color: p.totalSpillovers>0?'var(--danger)':'var(--accent2)', fontWeight:600 }}>
-                          {p.totalSpillovers}
-                        </span>
-                      </td>
-                      <td style={{ color:'#d2a8ff', fontWeight:600 }}>{p.commentsGiven ?? '—'}</td>
-                      <td style={{ color:'var(--accent4)', fontWeight:600 }}>{p.totalSP ?? '—'}</td>
-                    </tr>
-                    );
+                  {groupedPerfData.map(group => {
+                    const colCount = 15;
+                    return [
+                      groupedPerfData.length > 1 && (
+                        <tr key={`level-${group.level}`}>
+                          <td colSpan={colCount} style={{
+                            background:'rgba(88,166,255,0.06)', fontWeight:600, fontSize:12,
+                            color:'var(--accent4)', padding:'6px 12px',
+                            borderLeft:'3px solid var(--accent4)',
+                          }}>
+                            {group.level}
+                            <span style={{ fontWeight:400, color:'var(--text-muted)', marginLeft:8 }}>
+                              ({group.people.length})
+                            </span>
+                          </td>
+                        </tr>
+                      ),
+                      ...group.people.map(p => {
+                        const globalIdx = perfData.indexOf(p);
+                        const pr = prMetrics[p.github?.toLowerCase()];
+                        return (
+                        <tr key={p.github}>
+                          <td>
+                            <div style={{ display:'flex', flexDirection:'column' }}>
+                              <strong style={{ color: COLORS[globalIdx%COLORS.length] }}>{p.displayName}</strong>
+                              {p.displayName !== p.github && <span style={{ fontSize:11, color:'var(--text-muted)' }}>{p.github}</span>}
+                            </div>
+                          </td>
+                          <td style={{ color:'var(--accent)', fontWeight:600 }}>{pr?.prsMerged ?? '—'}</td>
+                          <td style={{ color:'var(--danger)', fontWeight:600 }}>{(pr?.prsClosedUnmerged ?? 0) + (p.glMRsClosedUnmerged ?? 0)}</td>
+                          <td style={{ color:'#FC6D26', fontWeight:600 }}>{p.glMRsMerged ?? '—'}</td>
+                          <td style={{ color:'var(--accent4)', fontWeight:600 }}>{(pr?.prsReviewed ?? 0) + (p.glMRsReviewed ?? 0)}</td>
+                          <td style={{ color:'#f0883e', fontWeight:600 }}>{pr?.avgLinesChanged != null ? pr.avgLinesChanged.toLocaleString() : '—'}</td>
+                          <td style={{ color:'#f0883e', fontWeight:600 }}>{p.glAvgLinesChanged != null ? p.glAvgLinesChanged.toLocaleString() : '—'}</td>
+                          <td style={{ color:'#d29922', fontWeight:600 }}>{(() => { const gh = pr?.avgFilesChanged; const gl = p.glAvgFilesChanged; if (gh != null && gl != null) return `${gh} / ${gl}`; return gh ?? gl ?? '—'; })()}</td>
+                          <td>
+                            {pr?.churnPct != null
+                              ? <span style={{ color:(pr.churnPct>60)?'var(--danger)':'inherit', fontWeight:600 }}>{pr.churnPct}%</span>
+                              : '—'}
+                          </td>
+                          <td><strong style={{ color:'var(--accent2)' }}>{p.issuesDone}</strong></td>
+                          <td>{p.issuesOpen}</td>
+                          <td>{p.avgCycleTime !== null ? `${p.avgCycleTime}d` : '—'}</td>
+                          <td>
+                            <span style={{ color: p.totalSpillovers>0?'var(--danger)':'var(--accent2)', fontWeight:600 }}>
+                              {p.totalSpillovers}
+                            </span>
+                          </td>
+                          <td style={{ color:'#d2a8ff', fontWeight:600 }}>{p.commentsGiven ?? '—'}</td>
+                          <td style={{ color:'var(--accent4)', fontWeight:600 }}>{p.totalSP ?? '—'}</td>
+                        </tr>
+                        );
+                      }),
+                    ];
                   })}
                 </tbody>
               </table>
@@ -364,7 +430,7 @@ export default function PerformanceTab() {
                 )}
               </button>
               {workSummaryOpen && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -4, marginBottom: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -4, marginBottom: 8, gap: 8 }}>
                   <button className="btn btn-outline" style={{ padding: '4px 12px', fontSize: 12 }}
                     onClick={downloadWorkSummaryCSV}>
                     ↓ Download CSV
@@ -373,11 +439,21 @@ export default function PerformanceTab() {
               )}
 
               {workSummaryOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
-                {(activeAssociate
-                  ? workSummary.filter(p => p.github?.toLowerCase() === activeAssociate.toLowerCase())
-                  : workSummary
-                ).map((p, personIdx) => {
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 12 }}>
+                {groupedWorkSummary.map(group => (
+                <div key={group.level}>
+                  {groupedWorkSummary.length > 1 && (
+                    <div style={{
+                      display:'flex', alignItems:'center', gap:10, marginBottom:10,
+                      padding:'6px 12px', background:'rgba(88,166,255,0.06)', borderRadius:6,
+                      borderLeft:'3px solid var(--accent4)',
+                    }}>
+                      <span style={{ fontSize:13, fontWeight:600, color:'var(--accent4)' }}>{group.level}</span>
+                      <span style={{ fontSize:11, color:'var(--text-muted)' }}>{group.people.length} associate{group.people.length !== 1 ? 's' : ''}</span>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {group.people.map((p, personIdx) => {
                   const color = COLORS[perfData.findIndex(d => d.github === p.github) % COLORS.length] || COLORS[personIdx % COLORS.length];
                   const doneIssues = p.jiraItems.filter(i => i.isDone);
                   const openIssues = p.jiraItems.filter(i => !i.isDone);
@@ -402,6 +478,9 @@ export default function PerformanceTab() {
                       >
                         <span style={{ fontSize: 11, color: 'var(--text-muted)', display: 'inline-block', transform: isCollapsed ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform .2s' }}>▶</span>
                         <span style={{ fontWeight: 700, fontSize: 14, color }}>{p.displayName}</span>
+                        {p.level && (
+                          <span style={{ fontSize: 11, color: 'var(--accent4)', fontWeight: 500 }}>{p.level}</span>
+                        )}
                         {p.displayName !== p.github && (
                           <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.github}</span>
                         )}
@@ -441,6 +520,14 @@ export default function PerformanceTab() {
                                   }}>
                                     {issue.status}
                                   </span>
+                                  {issue.resolutionDate && (
+                                    <span style={{
+                                      flexShrink: 0, fontSize: 10, color: 'var(--text-muted)',
+                                      fontFamily: 'monospace', whiteSpace: 'nowrap', marginTop: 1,
+                                    }}>
+                                      {issue.resolutionDate.slice(0, 10)}
+                                    </span>
+                                  )}
                                   <span style={{ minWidth: 0 }}>
                                     <a href={issue.url} target="_blank" rel="noreferrer"
                                       style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600, marginRight: 6 }}>
@@ -536,6 +623,9 @@ export default function PerformanceTab() {
                     </div>
                   );
                 })}
+                  </div>
+                </div>
+                ))}
               </div>
               )}
             </div>

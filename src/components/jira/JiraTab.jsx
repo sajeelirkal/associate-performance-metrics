@@ -4,10 +4,10 @@ import {
   Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LabelList,
 } from 'recharts';
 import { useAppContext } from '../../context/AppContext';
-import { GitHubIcon, JiraIcon, ChartTooltip, Pagination } from '../shared';
+import { GitHubIcon, JiraIcon, ChartTooltip, Pagination, usePagedList } from '../shared';
 import {
-  COLORS, PAGE_SIZE, statusColor, priorityIcon,
-  EXCLUDED_RESOLUTIONS, PRIORITY_ORDER, cleanDisplayName, looksLikeId,
+  COLORS, statusColor, priorityIcon,
+  EXCLUDED_RESOLUTIONS, PRIORITY_ORDER, cleanDisplayName, looksLikeId, downloadCSV,
 } from '../../utils/helpers';
 
 export default function JiraTab() {
@@ -22,20 +22,9 @@ export default function JiraTab() {
   const [jiraSearch, setJiraSearch] = useState('');
   const [jiraFilter, setJiraFilter] = useState('all');
   const [jiraResFilter, setJiraResFilter] = useState('all');
-  const [jiraPage, setJiraPage] = useState(1);
   const [expandedIssue, setExpandedIssue] = useState(null);
   const [jiraSortKey, setJiraSortKey] = useState(null);
   const [jiraSortDir, setJiraSortDir] = useState('asc');
-
-  const handleJiraSort = useCallback((key) => {
-    if (jiraSortKey === key) {
-      setJiraSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    } else {
-      setJiraSortKey(key);
-      setJiraSortDir('asc');
-    }
-    setJiraPage(1);
-  }, [jiraSortKey]);
 
   const filteredJiraIssues = useMemo(() => {
     let source = jiraIssues;
@@ -86,11 +75,17 @@ export default function JiraTab() {
     });
   }, [filteredJiraIssues, jiraSortKey, jiraSortDir]);
 
-  const pagedJira = useMemo(() => {
-    const s = (jiraPage - 1) * PAGE_SIZE;
-    return sortedJiraIssues.slice(s, s + PAGE_SIZE);
-  }, [sortedJiraIssues, jiraPage]);
-  const jiraTotalPages = Math.ceil(sortedJiraIssues.length / PAGE_SIZE);
+  const { page: jiraPage, setPage: setJiraPage, paged: pagedJira, totalPages: jiraTotalPages } = usePagedList(sortedJiraIssues, activeAssociate);
+
+  const handleJiraSort = useCallback((key) => {
+    if (jiraSortKey === key) {
+      setJiraSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setJiraSortKey(key);
+      setJiraSortDir('asc');
+    }
+    setJiraPage(1);
+  }, [jiraSortKey, setJiraPage]);
 
   const jiraContribData = useMemo(() => {
     const people = userMapping.length > 0
@@ -119,6 +114,14 @@ export default function JiraTab() {
       })
       .filter(p => p.total > 0);
   }, [filteredJiraIssues, userMapping, associateList, activeAssociate, getIssuesForAssignee]);
+
+  const downloadJiraCSV = useCallback(() => {
+    const rows = [['Key', 'Summary', 'Assignee', 'Status', 'Resolution', 'Priority', 'Issue Type', 'Days Active', 'Spillovers', 'Cycle Time (d)', 'Comments', 'Story Points', 'Sprint', 'URL']];
+    for (const i of sortedJiraIssues) {
+      rows.push([i.key, i.summary, i.assigneeDisplay, i.status, i.resolution || '', i.priority, i.issueType || '', i.daysInProgress ?? '', i.spillovers ?? '', i.cycleTime ?? '', i.commentCount ?? '', i.storyPoints ?? '', i.currentSprint?.name || '', i.url || '']);
+    }
+    downloadCSV(`jira-issues${activeAssociate ? `-${activeAssociate}` : ''}.csv`, rows);
+  }, [sortedJiraIssues, activeAssociate]);
 
   return (
     <>
@@ -340,6 +343,7 @@ export default function JiraTab() {
           <div className="table-card">
             <div className="table-header">
               <h3>Jira Issues <span className="badge">{filteredJiraIssues.length}</span></h3>
+              <button className="btn btn-outline" style={{ padding: '4px 12px', fontSize: 12 }} onClick={downloadJiraCSV}>↓ Download CSV</button>
             </div>
             <div className="table-wrap">
               <table>

@@ -1,11 +1,11 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, LabelList,
 } from 'recharts';
 import { useAppContext } from '../../context/AppContext';
-import { GitLabIcon, ChartTooltip, Pagination, InfoTip } from '../shared';
-import { PAGE_SIZE, fmtDate } from '../../utils/helpers';
+import { GitLabIcon, ChartTooltip, Pagination, InfoTip, usePagedList } from '../shared';
+import { fmtDate, downloadCSV } from '../../utils/helpers';
 
 export default function GitLabTab() {
   const {
@@ -17,10 +17,7 @@ export default function GitLabTab() {
 
   const [glMRListTab, setGlMRListTab] = useState('authored');
   const [glMRListSearch, setGlMRListSearch] = useState('');
-  const [glMRListPage, setGlMRListPage] = useState(1);
   const [glStatusFilter, setGlStatusFilter] = useState('all');
-
-  useEffect(() => { setGlMRListPage(1); }, [activeAssociate]);
 
   const glMRListItems = useMemo(() => {
     const logins = activeAssociate
@@ -49,11 +46,34 @@ export default function GitLabTab() {
     return filtered;
   }, [glMRMetrics, activeAssociate, associateList, ghToGl, glMRListTab, glMRListSearch, glStatusFilter]);
 
-  const pagedGLMRList = useMemo(() => {
-    const s = (glMRListPage - 1) * PAGE_SIZE;
-    return glMRListItems.slice(s, s + PAGE_SIZE);
-  }, [glMRListItems, glMRListPage]);
-  const glMRListTotalPages = Math.ceil(glMRListItems.length / PAGE_SIZE);
+  const { page: glMRListPage, setPage: setGlMRListPage, paged: pagedGLMRList, totalPages: glMRListTotalPages } = usePagedList(glMRListItems, activeAssociate);
+
+  const downloadMetricsCSV = useCallback(() => {
+    const logins = activeAssociate ? [activeAssociate] : associateList;
+    const rows = [['Associate', 'MRs Authored', 'MRs Merged', 'Reviews Given', 'Review Notes', 'Avg Cycle Time (d)', 'Avg Lines/MR', 'Avg Files/MR']];
+    for (const gh of logins) {
+      const gl = ghToGl(gh);
+      const m = glMRMetrics[gl] || glMRMetrics[gl?.toLowerCase()];
+      if (!m) continue;
+      rows.push([ghDisplayName(gh), m.mrsOpened ?? 0, m.mrsMerged ?? 0, m.mrsReviewed ?? 0, m.reviewNotes ?? 0, m.avgCycleTimeDays ?? '', m.avgLinesChanged ?? '', m.avgFilesChanged ?? '']);
+    }
+    downloadCSV(`gitlab-metrics${activeAssociate ? `-${activeAssociate}` : ''}.csv`, rows);
+  }, [glMRMetrics, activeAssociate, associateList, ghToGl, ghDisplayName]);
+
+  const downloadMRListCSV = useCallback(() => {
+    const isAuthored = glMRListTab === 'authored';
+    const header = isAuthored
+      ? ['MR', 'Title', 'Project', 'Author', 'Status', 'Additions', 'Deletions', 'Files', 'Created', 'Merged', 'URL']
+      : ['MR', 'Title', 'Project', 'Author', 'Reviewer', 'Status', 'Created', 'URL'];
+    const rows = [header];
+    for (const mr of glMRListItems) {
+      rows.push(isAuthored
+        ? [`!${mr.iid}`, mr.title, mr.project || '', mr.author, mr.state, mr.additions ?? '', mr.deletions ?? '', mr.changedFiles ?? '', mr.createdAt?.slice(0, 10) || '', mr.mergedAt?.slice(0, 10) || '', mr.url || '']
+        : [`!${mr.iid}`, mr.title, mr.project || '', mr.author, glDisplayName(mr.login), mr.state, mr.createdAt?.slice(0, 10) || '', mr.url || '']
+      );
+    }
+    downloadCSV(`gitlab-${glMRListTab}-mrs${activeAssociate ? `-${activeAssociate}` : ''}.csv`, rows);
+  }, [glMRListItems, glMRListTab, activeAssociate, glDisplayName]);
 
   return (
     <>
@@ -117,7 +137,10 @@ export default function GitLabTab() {
             if (!mrAuthors.length) return null;
             return (
               <>
-                <div className="stats-grid" style={{ marginTop:8 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8, marginBottom: 4 }}>
+                  <button className="btn btn-outline" style={{ padding: '4px 12px', fontSize: 12 }} onClick={downloadMetricsCSV}>↓ Download Metrics CSV</button>
+                </div>
+                <div className="stats-grid" style={{ marginTop:4 }}>
                   {[
                     { label:'MRs Authored', tip:'Total merge requests authored during the selected period — includes MRs created in-range plus MRs created earlier but merged in-range.', value: mrAuthors.reduce((s,a) => s + (a.mrsOpened ?? 0), 0), color:'#FC6D26' },
                     { label:'MRs Merged', tip:'Merge requests that were successfully merged into the target branch during the selected period.', value: mrAuthors.reduce((s,a) => s + (a.mrsMerged ?? 0), 0), color:'var(--accent2)' },
@@ -250,8 +273,11 @@ export default function GitLabTab() {
                 </span>
                 {' '}<span className="badge">{glMRListItems.length}</span>
               </h3>
-              <input className="input" type="text" placeholder="Search title, author, project, or !…"
-                value={glMRListSearch} onChange={e => { setGlMRListSearch(e.target.value); setGlMRListPage(1); }} style={{ width:280 }} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input className="input" type="text" placeholder="Search title, author, project, or !…"
+                  value={glMRListSearch} onChange={e => { setGlMRListSearch(e.target.value); setGlMRListPage(1); }} style={{ width:280 }} />
+                <button className="btn btn-outline" style={{ padding: '4px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={downloadMRListCSV}>↓ CSV</button>
+              </div>
             </div>
             <div className="table-wrap">
               {(() => {
